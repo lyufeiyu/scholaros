@@ -1,0 +1,16 @@
+.env
+.DS_Store
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.scholaros/
+dist/
+build/
+*.egg-info/
+
+# 本地开发工作记忆，不属于公开发布版
+task_plan.md
+findings.md
+progress.md

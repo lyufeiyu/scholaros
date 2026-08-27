@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="ScholarOS：面向研究者的证据追踪、方法设计与写作辅助工作台">
+  <title>ScholarOS · Research Assistant Workspace</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="/" aria-label="ScholarOS 首页">
+        <span class="brand-mark">S</span>
+        <span><strong>ScholarOS</strong><small>Research Workspace</small></span>
+      </a>
+
+      <nav class="primary-nav" aria-label="主导航">
+        <button class="nav-button is-active" type="button" data-view="projects">
+          <span aria-hidden="true">⌁</span> 研究工作台
+        </button>
+        <button class="nav-button" type="button" data-view="search">
+          <span aria-hidden="true">⌕</span> 跨源论文检索
+        </button>
+      </nav>
+
+      <section class="sidebar-section">
+        <div class="section-heading">
+          <span>最近项目</span>
+          <button id="refreshProjects" class="icon-button" type="button" title="刷新项目">↻</button>
+        </div>
+        <div id="recentProjects" class="recent-projects">
+          <p class="muted compact">正在读取项目…</p>
+        </div>
+      </section>
+
+      <section class="sidebar-section source-section">
+        <div class="section-heading"><span>连接状态</span></div>
+        <div id="sourceStatus" class="source-status"></div>
+      </section>
+
+      <div class="sidebar-footer">
+        <div id="modelBadge" class="model-badge"><span></span> 检查模型配置…</div>
+        <a href="/docs" target="_blank" rel="noreferrer">API 文档 ↗</a>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <header class="topbar">
+        <div>
+          <span class="eyebrow">RESEARCH ASSISTANT WORKSPACE</span>
+          <h1 id="pageTitle">研究工作台</h1>
+        </div>
+        <div id="systemStatus" class="system-status"><span></span> 正在连接</div>
+      </header>
+
+      <section id="projectsView" class="view is-active">
+        <div class="hero-grid">
+          <div class="hero-copy">
+            <span class="hero-kicker">QUESTION → EVIDENCE → METHOD</span>
+            <h2>让研究过程<br>留下可核验的证据链。</h2>
+            <p>从问题收敛、跨源检索、证据账本到方法与草稿辅助，每一步都可恢复、可检查，并由研究者确认。</p>
+          </div>
+          <div class="hero-stat-grid" aria-label="核心能力">
+            <div><strong>7</strong><span>研究阶段</span></div>
+            <div><strong>7</strong><span>论文来源</span></div>
+            <div><strong>9 类</strong><span>质量检查</span></div>
+            <div><strong>MD</strong><span>开放制品</span></div>
+          </div>
+        </div>
+
+        <section class="panel create-panel">
+          <div class="panel-heading">
+            <div><span class="step-number">01</span><h3>提出研究问题</h3></div>
+            <p>一句尚不成熟的想法也可以，ScholarOS 会给出可检验的候选规格，供研究者审阅和修订。</p>
+          </div>
+          <form id="createForm">
+            <label class="field-label" for="idea">研究想法或核心问题</label>
+            <textarea id="idea" name="idea" minlength="8" maxlength="5000" required placeholder="例如：如何评估多智能体科研助手对引用可靠性和研究设计质量的影响？"></textarea>
+            <div class="field-row">
+              <div class="field-group grow">
+                <span class="field-label">论文来源</span>
+                <div id="createSources" class="source-options" aria-label="选择论文来源"></div>
+              </div>
+            </div>
+            <details class="advanced-options">
+              <summary>添加已有资料或真实实验结果 <span>可选</span></summary>
+              <div class="upload-grid">
+                <label class="file-drop">
+                  <span class="file-icon">文</span>
+                  <strong>参考资料</strong>
+                  <small>PDF / TXT / Markdown，可多选</small>
+                  <input id="sourceFiles" type="file" accept=".pdf,.txt,.md,.markdown" multiple>
+                </label>
+                <label class="file-drop result-drop">
+                  <span class="file-icon">数</span>
+                  <strong>真实结果资料</strong>
+                  <small>有数据时才生成结果性结论</small>
+                  <input id="resultFiles" type="file" accept=".pdf,.txt,.md,.markdown" multiple>
+                </label>
+              </div>
+            </details>
+            <div class="form-footer">
+              <p id="createFeedback" class="form-feedback" role="status">系统不会把缺失的数据写成实验结果。</p>
+              <button id="createButton" class="primary-button" type="submit">
+                <span>创建研究项目</span><span aria-hidden="true">→</span>
+              </button>
+            </div>
+          </form>
+        </section>
+
+        <section id="projectWorkspace" class="panel workspace-panel" hidden>
+          <div class="workspace-header">
+            <div>
+              <span id="projectStatus" class="status-pill">待运行</span>
+              <h3 id="projectTitle">研究项目</h3>
+              <p id="projectMeta" class="muted"></p>
+            </div>
+            <div class="workspace-actions">
+              <button id="refreshProject" class="secondary-button" type="button">刷新状态</button>
+              <button id="deleteProject" class="danger-button" type="button">删除项目</button>
+              <button id="runProject" class="primary-button small" type="button">开始运行</button>
+            </div>
+          </div>
+
+          <div class="progress-card">
+            <div class="progress-copy"><span id="stageText">准备开始</span><strong id="progressPercent">0%</strong></div>
+            <div class="progress-track"><span id="progressFill"></span></div>
+            <ol id="stageList" class="stage-list">
+              <li data-stage="scoping"><span>1</span>范围界定</li>
+              <li data-stage="searching"><span>2</span>跨源检索</li>
+              <li data-stage="synthesizing"><span>3</span>证据综合</li>
+              <li data-stage="designing"><span>4</span>方法设计</li>
+              <li data-stage="drafting"><span>5</span>研究稿起草</li>
+              <li data-stage="reviewing"><span>6</span>质量检查</li>
+              <li data-stage="revising"><span>7</span>辅助修订</li>
+            </ol>
+          </div>
+
+          <section id="searchConfirmation" class="search-confirmation" hidden>
+            <div>
+              <span class="eyebrow">PRIVACY CHECKPOINT</span>
+              <h4>确认将要发送给论文源的检索词</h4>
+              <p>这些词来自上传资料与研究想法。确认前，ScholarOS 不会把它们发送给第三方。</p>
+              <p id="searchPlanWarning" class="confirmation-warning" hidden></p>
+              <ol id="pendingSearchQueries"></ol>
+            </div>
+            <div class="confirmation-actions">
+              <button id="rejectSearch" class="secondary-button" type="button">修改研究说明并重做</button>
+              <button id="confirmSearch" class="primary-button small" type="button">确认并开始检索</button>
+            </div>
+          </section>
+
+          <div class="workspace-grid">
+            <section class="subpanel">
+              <div class="subpanel-heading"><h4>研究制品</h4><span>Artifacts</span></div>
+              <div id="artifactList" class="artifact-list"><p class="muted">尚未生成制品。</p></div>
+            </section>
+            <section class="subpanel">
+              <div class="subpanel-heading"><h4>质量与资料</h4><span>Quality checks</span></div>
+              <div id="reviewSummary" class="review-summary"><p class="muted">修订完成后显示质量检查报告。</p></div>
+              <div class="inline-upload">
+                <label>补充参考资料<input id="moreSourceFiles" type="file" accept=".pdf,.txt,.md,.markdown" multiple></label>
+                <label>补充真实结果<input id="moreResultFiles" type="file" accept=".pdf,.txt,.md,.markdown" multiple></label>
+                <button id="uploadMore" class="secondary-button" type="button">上传所选资料</button>
+              </div>
+            </section>
+          </div>
+
+          <section id="paperPreviewPanel" class="paper-preview-panel" hidden>
+            <div class="subpanel-heading">
+              <h4>研究草稿预览</h4>
+              <button id="closePreview" class="icon-button" type="button" aria-label="关闭预览">×</button>
+            </div>
+            <pre id="paperPreview"></pre>
+          </section>
+        </section>
+      </section>
+
+      <section id="searchView" class="view">
+        <div class="search-heading">
+          <span class="eyebrow">DISCOVER WITH TRACEABILITY</span>
+          <h2>跨源论文检索</h2>
+          <p>系统先从勾选来源获取候选，再严格核验作者、完整标题、DOI 或期刊/会议；综合主题按有效词项覆盖率过滤宽泛结果，并按 DOI 或标题去重。</p>
+        </div>
+        <section class="panel search-panel">
+          <form id="searchForm">
+            <label class="field-label" for="searchQuery">标题、关键词或自然语言研究问题（中文、英文均可）</label>
+            <div class="search-field-row">
+              <label for="searchField">检索字段</label>
+              <select id="searchField">
+                <option value="all">综合主题（标题 / 摘要 / 关键词）</option>
+                <option value="title">论文标题</option>
+                <option value="author">作者姓名</option>
+                <option value="doi">DOI</option>
+                <option value="venue">期刊 / 会议</option>
+              </select>
+              <span id="searchFieldHint">按有效词项覆盖率过滤宽泛结果；可启用自然语言理解。</span>
+            </div>
+            <div class="search-box">
+              <input id="searchQuery" minlength="2" required placeholder="例如：如何减少科研智能体生成的错误引用？">
+              <button id="searchButton" class="primary-button" type="submit">搜索论文</button>
+            </div>
+            <div id="authorFilters" class="author-filter-grid" hidden>
+              <label>
+                <span>学校 / 机构（可选）</span>
+                <input id="authorAffiliation" minlength="2" maxlength="200" placeholder="例如：Shenzhen University">
+              </label>
+              <label>
+                <span>主题关键词（可选）</span>
+                <input id="authorTopic" minlength="2" maxlength="200" placeholder="例如：computer vision agents">
+              </label>
+              <label>
+                <span>期刊 / 会议（可选）</span>
+                <input id="authorVenue" minlength="2" maxlength="200" placeholder="例如：CVPR">
+              </label>
+              <p>附加条件按 AND 组合；机构只核对该姓名对应作者，不会误用合作者的学校。</p>
+            </div>
+            <label class="query-mode-option">
+              <input id="naturalLanguageSearch" type="checkbox">
+              <span><strong>自然语言理解</strong><small>勾选后先用已配置模型转换为英文学术检索词；无模型时会明确提示。搜索准确标题或缩写时不要勾选</small></span>
+            </label>
+            <div id="searchSources" class="source-options compact-options"></div>
+          </form>
+        </section>
+        <div class="search-feedback-row">
+          <div id="searchFeedback" class="search-feedback muted">输入检索内容后开始搜索。</div>
+          <a id="googleScholarLink" class="scholar-link" href="#" target="_blank" rel="noreferrer noopener" hidden>在 Google Scholar 手动补充检索 ↗</a>
+        </div>
+        <section id="searchPlan" class="search-plan" aria-live="polite" hidden></section>
+        <div id="searchResults" class="search-results"></div>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast" class="toast" role="alert" aria-live="assertive"></div>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scholaros"
+version = "0.1.0"
+description = "面向研究者的证据追踪、方法设计与写作辅助工作台"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "ScholarOS Contributors" }]
+dependencies = [
+  "fastapi>=0.115,<1",
+  "uvicorn[standard]>=0.32,<1",
+  "pydantic>=2.10,<3",
+  "pypdf>=5,<7",
+  "python-multipart>=0.0.20,<1",
+  "python-dotenv>=1.1,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3,<10",
+  "pytest-asyncio>=0.24,<2",
+  "httpx>=0.28,<1",
+  "ruff>=0.9,<1",
+  "build>=1.2,<2",
+  "setuptools>=75",
+]
+
+[project.scripts]
+scholaros = "scholaros.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["scholaros*"]
+
+[tool.setuptools.package-data]
+scholaros = ["static/*.html", "static/*.css", "static/*.js"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = [
+  "B008", # FastAPI 官方依赖声明需要在参数默认值中调用 File/Depends。
+  "E501", # Markdown 论文模板与内嵌演示页保留自然段可读性。
+]

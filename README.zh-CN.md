@@ -8,7 +8,7 @@
 
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](./LICENSE)
-[![Checks](https://img.shields.io/badge/checks-passing-2ea44f)](./scripts/check.sh)
+[![Checks](https://img.shields.io/badge/checks-run_locally-586069)](./scripts/check.sh)
 
 [快速开始](#快速开始) · [功能](#功能) · [检索](#检索) · [架构](#架构概览) · [文档](#文档) · [贡献](./CONTRIBUTING.zh-CN.md)
 
@@ -53,20 +53,19 @@ ScholarOS 是科研辅助工具，不是自动论文作者，也不应被用于�
 - 将 PDF、TXT 和 Markdown 作为参考资料或实验结果加入项目。
 - 并行检索 arXiv、OpenAlex、Crossref、Semantic Scholar、DBLP、ACM 元数据和可选 IEEE Xplore。
 - 支持综合主题、自然语言、标题、作者、DOI 和期刊/会议检索；作者条件可叠加机构、主题和会议。
-- 在检索词外发前要求确认，并单独报告每个论文源的失败原因。
+- 上传参考资料的项目和引导式项目在外发检索词前等待确认，并单独报告每个论文源的失败原因。
 - 对初稿和修订稿执行 9 类确定性质量检查：章节结构、证据、引用、方法要素、图设计、表设计、结果来源、研究者责任声明和正文完整度。
-- 保存项目状态和中间制品，支持查看、重跑和删除。
+- 可选逐步确认；中断后从断点继续，或只重做指定阶段及其后续步骤，保留上游成果。重做前自动保存历史快照。
 
 ## 快速开始
 
 ### 1. 创建 Conda 环境
 
-项目使用名为 `scholaros` 的 Conda 环境，不创建项目内第二套 Python 环境：
+创建名为 `scholaros` 的 Conda 环境；环境文件已包含项目及开发依赖的安装：
 
 ```bash
 conda env create -f environment.yml
 conda activate scholaros
-python -m pip install -e ".[dev]"
 ```
 
 如环境已经存在：
@@ -105,6 +104,22 @@ scholaros run "如何评估科研智能体的引用可靠性？" --offline
 ```
 
 `--offline` 是明确的无外部检索演示模式；正式研究应配置模型、论文源并检查外发检索计划。
+
+### 一步步推进研究
+
+终端菜单选择 `g`，或在 Web 新建项目时勾选引导模式。系统会在范围界定、证据综合、方法设计和初稿完成后停下，等你检查；外发检索词另行确认。
+
+```bash
+scholaros run "如何评估科研智能体的引用可靠性？" --guided
+scholaros show PROJECT_ID
+scholaros approve PROJECT_ID                       # 确认当前阶段
+scholaros confirm-search PROJECT_ID                # 确认外发检索词
+scholaros resume PROJECT_ID                        # 重试中断的阶段
+scholaros rerun PROJECT_ID --from-stage designing  # 保留范围、检索和证据
+scholaros history PROJECT_ID
+```
+
+这些是分别使用的操作，请按项目当前状态选择。不加 `--guided` 仍按原来的自动流程运行。当前支持阶段级检查和重做，尚不支持逐章对话编辑。完整操作和历史存储边界见[分步研究与恢复](./docs/zh-CN/workflow.md)。
 
 ### 4. 不激活环境时启动
 
@@ -228,6 +243,7 @@ python -m pip install -e ".[dev]"
 
 - [文档索引](./docs/zh-CN/README.md)
 - [环境配置](./docs/zh-CN/environment.md)
+- [分步研究与恢复](./docs/zh-CN/workflow.md)
 - [架构思路](./docs/zh-CN/architecture.md)
 - [代码说明](./docs/zh-CN/code-guide.md)
 - [科研辅助与学术诚信](./docs/zh-CN/research-integrity.md)

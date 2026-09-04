@@ -7,7 +7,7 @@
 ```text
 src/scholaros/
 ├── api.py          # FastAPI、Web 首页、后台任务与上传/下载
-├── cli.py          # run/search/show/serve 命令
+├── cli.py          # run/search/show/serve 及 resume/approve/rerun/history 命令
 ├── config.py       # 环境配置与工作目录
 ├── domain.py       # 项目、阶段、论文、证据、质量检查等领域对象
 ├── ingestion.py    # PDF/TXT/Markdown 文本摄取
@@ -25,7 +25,7 @@ src/scholaros/
 ## 关键调用链
 
 1. `ResearchWorkflow.create_project()` 创建项目和首个事件。
-2. `run()` 从当前 `stage` 继续，阶段开始/结束都会持久化和发事件。
+2. `run()` 从当前 `stage` 执行；`resume()` 获取项目锁后可恢复遗留的运行状态。阶段完成后推进游标，待确认节点必须显式确认。
 3. `ResearchWriter.scope()` 同时读取 idea 与上传资料摘要；有 source 时必须输出可在单份正文摘录中逐字核验的 `source_basis`，并在检索词外发前执行长度、控制字符、URL/标识符与主题关联校验。
 4. 带 source 的项目在 SEARCHING 首次进入 `search_confirmation_required`，确认前零外部请求；`confirm_search_plan()` 继续，`reject_search_plan()` 可修改 idea 并回到 SCOPING。中文依据到英文检索词以及可能敏感但也可能合法的学术词只作人工警告，不以静态禁词误杀。
 5. `PaperSearchService.search_many()` 分别检索前三个互补研究短语，按查询簇轮转保底后去重；来源触发限流、鉴权或临时错误后，本批次不再立即重复请求。正常工作流零命中时停止，只有显式 offline 允许继续。
@@ -42,7 +42,7 @@ src/scholaros/
 - `python -m scholaros` 或无参数 `scholaros` 进入终端向导。
 - `./scholaros.sh serve` 启动 Web 工作台；静态资源随 wheel 一起打包。
 - Web 的创建逻辑先建立项目、上传可选资料，再启动后台工作流，避免运行中上传覆盖项目快照。
-- 所有网络按钮都会把 API 错误显示为页面提示；项目状态由轮询更新，资料补充后通过 `restart=true` 从头运行。重跑保留上传资料、清除上一轮生成制品，避免失败页继续暴露陈旧论文。
+- 网络按钮把 API 错误显示为页面提示，项目状态由轮询更新。页面区分断点继续、阶段确认、局部重做和从头运行；重做先保存旧输出快照，再使下游阶段失效，详见[分步研究与恢复](workflow.md)。
 
 完整环境安装、更新、验证和排错见 [环境配置说明](environment.md)。
 
@@ -89,7 +89,7 @@ class MySource:
 ## 添加工作流阶段
 
 1. 在 `domain.Stage` 增加枚举。
-2. 加到 `ResearchWorkflow.stage_order`。
+2. 加到 `ResearchWorkflow.stage_order`、`stage_outputs` 和 `stage_artifacts`，并决定是否设置引导确认点。
 3. 在 `_run_stages()` 实现幂等阶段，并保存输入/输出制品。
 4. 新增恢复与失败测试。
 
@@ -111,5 +111,6 @@ class MySource:
 - `test_review.py`：正文引用、证据、方法要素、研究者责任声明和结果数值来源检查。
 - `test_workflow.py`：离线端到端、制品、事件、重载、资料优先级和并发写保护。
 - `test_api.py`：静态页面、项目生命周期、上传、重启参数和运行中写保护。
+- `test_checkpoints.py`：引导确认、局部重做、旧运行状态恢复、离线模式持久化、历史快照和原子写入失败。
 
 网络 API 不放进稳定测试套件，避免外部波动；单独使用 CLI 做真实源冒烟。

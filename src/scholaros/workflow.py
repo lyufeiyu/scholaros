@@ -11,6 +11,7 @@ from typing import Any
 
 from scholaros.config import Settings
 from scholaros.domain import (
+    MAX_RESEARCH_IDEA_LENGTH,
     Event,
     Paper,
     Project,
@@ -18,6 +19,7 @@ from scholaros.domain import (
     SearchField,
     SearchQueryPlan,
     Stage,
+    utc_now,
 )
 from scholaros.ingestion import DocumentIngestor
 from scholaros.llm import OpenAICompatibleModel
@@ -39,6 +41,23 @@ class ResearchWorkflow:
         Stage.REVIEWING,
         Stage.REVISING,
     ]
+    stage_outputs = {
+        Stage.SCOPING: ("spec",),
+        Stage.SEARCHING: ("papers", "source_failures", "search_filtered_out", "search_queries",
+                          "search_plan_confirmed", "search_confirmation_required", "search_plan_warnings"),
+        Stage.SYNTHESIZING: ("evidence",),
+        Stage.DESIGNING: ("design",),
+        Stage.DRAFTING: (),
+        Stage.REVIEWING: ("review",),
+        Stage.REVISING: ("final_review",),
+    }
+    stage_artifacts = {
+        Stage.SCOPING: (), Stage.SEARCHING: ("papers.json",),
+        Stage.SYNTHESIZING: ("evidence.json",), Stage.DESIGNING: ("research-design.json",),
+        Stage.DRAFTING: ("paper-draft.md",), Stage.REVIEWING: ("review.json",),
+        Stage.REVISING: ("paper.md", "final-review.json"),
+    }
+    guided_stages = {Stage.SCOPING, Stage.SYNTHESIZING, Stage.DESIGNING, Stage.DRAFTING}
 
     def __init__(
         self,
@@ -52,24 +71,31 @@ class ResearchWorkflow:
     ) -> None:
         self.settings = settings
         self.store = store or ProjectStore(settings)
-        self.search = search or PaperSearchService.default(settings)
-        model = OpenAICompatibleModel(settings) if settings.api_key else None
+        self.search = search or (
+            PaperSearchService([]) if allow_empty_search else PaperSearchService.default(settings)
+        )
+        model = OpenAICompatibleModel(settings) if settings.api_key and not allow_empty_search else None
         self.writer = writer or ResearchWriter(model)
         self.reviewer = reviewer or PaperReviewer()
         self.ingestor = DocumentIngestor()
         self.progress_sink = progress_sink
         self.allow_empty_search = allow_empty_search
 
-    def create_project(self, idea: str, selected_sources: Sequence[str] | None = None) -> Project:
+    def create_project(
+        self, idea: str, selected_sources: Sequence[str] | None = None, *, guided: bool = False
+    ) -> Project:
         clean_idea = idea.strip()
         if len(clean_idea) < 8:
             raise ValueError("研究想法至少需要 8 个字符")
+        if len(clean_idea) > MAX_RESEARCH_IDEA_LENGTH:
+            raise ValueError(f"研究想法最多支持 {MAX_RESEARCH_IDEA_LENGTH:,} 个字符")
         sources = list(selected_sources or [])
         self.validate_sources(sources)
         project = Project(
             id=uuid.uuid4().hex[:12],
             idea=clean_idea,
             selected_sources=sources,
+            state={"schema_version": 1, "guided": guided, "offline": self.allow_empty_search},
         )
         self.store.save_project(project)
         self._event(project, "project_created", {"idea": clean_idea})
@@ -119,9 +145,13 @@ class ResearchWorkflow:
             None,
         )
         if existing is None:
+            if project.state.get("spec"):
+                self.store.snapshot_project(project, "添加研究资料")
             documents.append(item)
             if role == "source":
                 self._reset_after_source_change(project, documents)
+            elif project.state.get("spec") and project.stage in self.stage_order[2:] + [Stage.COMPLETED]:
+                self._invalidate_from(project, Stage.SYNTHESIZING)
             self.store.save_project(project)
             self._event(
                 project,
@@ -130,6 +160,7 @@ class ResearchWorkflow:
             )
             return item
         if existing.get("role", "source") != role:
+            self.store.snapshot_project(project, "修改资料角色")
             existing["role"] = role
             self._reset_after_source_change(project, documents)
             self.store.save_project(project)
@@ -147,6 +178,9 @@ class ResearchWorkflow:
         project.state = {
             "documents": list(documents),
             "clear_generated_on_next_run": True,
+            "guided": project.state.get("guided", False),
+            "offline": project.state.get("offline", False),
+            "schema_version": 1,
         }
         project.title = None
         project.stage = Stage.SCOPING
@@ -157,21 +191,124 @@ class ResearchWorkflow:
         with self.store.project_lock(project_id):
             return await self._run_locked(project_id, restart=restart)
 
+    def prepare_resume(self, project_id: str) -> None:
+        """调用者必须持有项目锁；获取锁后可确认旧 running 状态已经失活。"""
+        project = self._require_project(project_id)
+        if project.status == ProjectStatus.RUNNING:
+            project.status = ProjectStatus.FAILED
+            project.error = "恢复上次中断的步骤"
+            self.store.save_project(project)
+
+    async def resume(self, project_id: str) -> Project:
+        with self.store.project_lock(project_id):
+            self.prepare_resume(project_id)
+            return await self._run_locked(project_id)
+
+    def prepare_rerun(self, project_id: str, stage: Stage | str) -> None:
+        """持锁后调用；只使选定阶段及其下游失效，保留上游输入。"""
+        project = self._require_project(project_id)
+        stage = Stage(stage)
+        if stage not in self.stage_order:
+            raise ValueError("请选择七个研究阶段之一")
+        index = self.stage_order.index(stage)
+        checkpoint = project.state.get("pending_checkpoint")
+        if checkpoint and index > self.stage_order.index(Stage(checkpoint)):
+            raise ValueError("请先确认当前阶段，或重做该阶段；不能跳过人工确认")
+        if project.state.get("search_confirmation_required") and index > 1:
+            raise ValueError("请先确认检索计划，不能跳过外发查询确认")
+        if project.stage in self.stage_order and index > self.stage_order.index(project.stage):
+            raise ValueError("上游阶段尚未成功完成，请先继续或重做当前阶段")
+        for previous in self.stage_order[:index]:
+            key = {Stage.SCOPING: "spec", Stage.SEARCHING: "papers",
+                   Stage.SYNTHESIZING: "evidence", Stage.DESIGNING: "design",
+                   Stage.REVIEWING: "review"}.get(previous)
+            if key and key not in project.state:
+                raise ValueError(f"缺少上游阶段 {previous.value} 的结果，不能从 {stage.value} 开始")
+            for name in self.stage_artifacts[previous]:
+                if self.store.artifact_path(project.id, name) is None:
+                    raise ValueError(f"缺少上游制品 {name}，请先重做 {previous.value}")
+        pending = project.state.get("pending_clear_from")
+        if project.state.get("clear_generated_on_next_run") or (
+            pending and index > self.stage_order.index(Stage(pending))
+        ):
+            raise ValueError("上游资料已改变，请先继续当前待运行阶段")
+        self.store.snapshot_project(project, f"从 {stage.value} 重做")
+        self._invalidate_from(project, stage)
+        self.store.save_project(project)
+
+    def _invalidate_from(self, project: Project, stage: Stage) -> None:
+        invalid = self.stage_order[self.stage_order.index(stage):]
+        for item in invalid:
+            for key in self.stage_outputs[item]:
+                project.state.pop(key, None)
+        project.state.pop("pending_checkpoint", None)
+        project.state["completed_stages"] = [
+            value for value in project.state.get("completed_stages", []) if value not in invalid
+        ]
+        project.state["approvals"] = [
+            item for item in project.state.get("approvals", []) if item.get("stage") not in invalid
+        ]
+        project.state["pending_clear_from"] = stage.value
+        project.stage = stage
+        project.status = ProjectStatus.CREATED
+        project.error = None
+        if stage == Stage.SCOPING:
+            project.title = None
+
+    async def rerun_from(self, project_id: str, stage: Stage | str) -> Project:
+        with self.store.project_lock(project_id):
+            self.prepare_rerun(project_id, stage)
+            return await self._run_locked(project_id)
+
+    def approve_checkpoint(self, project_id: str) -> None:
+        """持锁后确认已完成的阶段，不修改其输出。"""
+        project = self._require_project(project_id)
+        pending = project.state.get("pending_checkpoint")
+        if not pending or project.status != ProjectStatus.NEEDS_ATTENTION:
+            raise ValueError("当前没有待确认的研究阶段")
+        project.state.setdefault("approvals", []).append({
+            "stage": pending, "confirmed_at": utc_now(),
+        })
+        project.state.pop("pending_checkpoint")
+        project.status = ProjectStatus.CREATED
+        project.error = None
+        self.store.save_project(project)
+        self._event(project, "checkpoint_approved", {"stage": pending})
+
+    async def approve_and_run(self, project_id: str) -> Project:
+        with self.store.project_lock(project_id):
+            self.approve_checkpoint(project_id)
+            return await self._run_locked(project_id)
+
     async def _run_locked(self, project_id: str, *, restart: bool = False) -> Project:
         project = self._require_project(project_id)
+        if project.state.get("offline") and not self.allow_empty_search:
+            # 离线项目跨进程恢复时仍保持离线，不改动共享工作流或其他项目的配置。
+            offline_flow = ResearchWorkflow(
+                self.settings, store=self.store, search=PaperSearchService([]),
+                writer=ResearchWriter(), reviewer=self.reviewer,
+                progress_sink=self.progress_sink, allow_empty_search=True,
+            )
+            return await offline_flow._run_locked(project_id, restart=restart)
         self.validate_sources(project.selected_sources)
         if project.status == ProjectStatus.RUNNING and not restart:
             raise RuntimeError("项目已在运行")
         if project.status == ProjectStatus.COMPLETED and not restart:
             return project
+        if not restart and (project.state.get("pending_checkpoint") or project.stage == Stage.COMPLETED):
+            return project
         clear_generated = restart or bool(
             project.state.get("clear_generated_on_next_run", False)
         )
         if restart:
+            self.store.snapshot_project(project, "从头重新运行")
             documents = project.state.get("documents", [])
             project.state = {
                 "documents": documents,
                 "clear_generated_on_next_run": True,
+                "guided": project.state.get("guided", False),
+                "offline": project.state.get("offline", False),
+                "schema_version": 1,
             }
             project.stage = Stage.SCOPING
         project.status = ProjectStatus.RUNNING
@@ -182,6 +319,14 @@ class ResearchWorkflow:
             if clear_generated:
                 self.store.clear_generated_artifacts(project.id)
                 project.state.pop("clear_generated_on_next_run", None)
+                self.store.save_project(project)
+            if pending := project.state.get("pending_clear_from"):
+                names = frozenset(
+                    name for stage in self.stage_order[self.stage_order.index(Stage(pending)):]
+                    for name in self.stage_artifacts[stage]
+                )
+                self.store.clear_generated_artifacts(project.id, names)
+                project.state.pop("pending_clear_from")
                 self.store.save_project(project)
             await self._run_stages(project)
         except asyncio.CancelledError:
@@ -243,11 +388,17 @@ class ResearchWorkflow:
             raise ValueError("该项目当前没有待拒绝的检索计划")
         if revised_idea is not None:
             clean_idea = revised_idea.strip()
-            if len(clean_idea) < 8 or len(clean_idea) > 5_000:
-                raise ValueError("修改后的研究想法必须为 8—5000 个字符")
-            project.idea = clean_idea
+            if not 8 <= len(clean_idea) <= MAX_RESEARCH_IDEA_LENGTH:
+                raise ValueError(f"修改后的研究想法必须为 8—{MAX_RESEARCH_IDEA_LENGTH:,} 个字符")
         documents = project.state.get("documents", [])
-        project.state = {"documents": documents}
+        self.store.snapshot_project(project, "拒绝检索计划")
+        if revised_idea is not None:
+            project.idea = clean_idea
+        project.state = {
+            "documents": documents, "guided": project.state.get("guided", False),
+            "offline": project.state.get("offline", False), "schema_version": 1,
+            "clear_generated_on_next_run": True,
+        }
         project.title = None
         project.stage = Stage.SCOPING
         project.status = ProjectStatus.CREATED
@@ -333,7 +484,7 @@ class ResearchWorkflow:
                     for item in project.state.get("documents", [])
                 )
                 if (
-                    has_source_documents
+                    (has_source_documents or project.state.get("guided"))
                     and not self.allow_empty_search
                     and not project.state.get("search_plan_confirmed")
                 ):
@@ -343,7 +494,7 @@ class ResearchWorkflow:
                     )
                     project.status = ProjectStatus.NEEDS_ATTENTION
                     project.error = (
-                        "上传资料派生的检索计划需要你确认；确认前不会向第三方论文源发送查询"
+                        "检索计划需要你确认；确认前不会向第三方论文源发送查询"
                     )
                     self.store.save_project(project)
                     self._event(
@@ -455,8 +606,20 @@ class ResearchWorkflow:
                     json.dumps(final_review.to_dict(), ensure_ascii=False, indent=2),
                 )
 
+            completed = project.state.setdefault("completed_stages", [])
+            if stage.value not in completed:
+                completed.append(stage.value)
+            next_index = self.stage_order.index(stage) + 1
+            if next_index < len(self.stage_order):
+                project.stage = self.stage_order[next_index]
+            if project.state.get("guided") and stage in self.guided_stages:
+                project.state["pending_checkpoint"] = stage.value
+                project.status = ProjectStatus.NEEDS_ATTENTION
+                project.error = f"{stage.value} 已完成，请检查结果后确认继续，或选择该阶段重做"
             self.store.save_project(project)
             self._event(project, "stage_completed", {"stage": stage.value})
+            if project.state.get("pending_checkpoint"):
+                return
 
         project.stage = Stage.COMPLETED
         final_passed = bool(project.state.get("final_review", {}).get("passed"))

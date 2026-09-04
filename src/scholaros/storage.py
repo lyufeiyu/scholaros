@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import logging
 import re
@@ -254,11 +255,70 @@ class ProjectStore:
         directory = self.settings.artifacts_path / project_id
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / name
-        if isinstance(content, bytes):
-            path.write_bytes(content)
-        else:
-            path.write_text(content, encoding="utf-8")
+        temporary = directory / f".{name}.{uuid4().hex}.tmp"
+        try:
+            if isinstance(content, bytes):
+                temporary.write_bytes(content)
+            else:
+                temporary.write_text(content, encoding="utf-8")
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
         return path
+
+    def snapshot_project(self, project: Project, reason: str) -> str:
+        """在失效或重跑前保留状态与生成制品；历史不包含密钥或配置环境。"""
+        self._validate_project_id(project.id)
+        root = self.settings.artifacts_path / project.id / "history"
+        root.mkdir(parents=True, exist_ok=True)
+        revision = uuid4().hex
+        temporary = root / f".{revision}.tmp"
+        temporary.mkdir()
+        try:
+            hashes = {}
+            for name in GENERATED_ARTIFACTS:
+                source = self.artifact_path(project.id, name)
+                if source is not None:
+                    content = source.read_bytes()
+                    (temporary / name).write_bytes(content)
+                    hashes[name] = hashlib.sha256(content).hexdigest()
+            manifest = {
+                "revision": revision,
+                "created_at": utc_now(),
+                "reason": reason,
+                "project": project.to_dict(),
+                "artifacts": hashes,
+            }
+            (temporary / "manifest.json").write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            temporary.rename(root / revision)
+        except BaseException:
+            shutil.rmtree(temporary)
+            raise
+        return revision
+
+    def list_history(self, project_id: str) -> list[dict[str, Any]]:
+        self._validate_project_id(project_id)
+        root = self.settings.artifacts_path / project_id / "history"
+        entries = []
+        if root.is_dir():
+            for path in root.glob("*/manifest.json"):
+                if not re.fullmatch(r"[a-f0-9]{32}", path.parent.name):
+                    continue
+                value = json.loads(path.read_text(encoding="utf-8"))
+                entries.append({key: value[key] for key in (
+                    "revision", "created_at", "reason", "artifacts"
+                )})
+        return sorted(entries, key=lambda value: value["created_at"], reverse=True)
+
+    def history_artifact_path(self, project_id: str, revision: str, name: str) -> Path | None:
+        if not self._is_project_id(project_id) or not re.fullmatch(r"[a-f0-9]{32}", revision):
+            return None
+        if name not in GENERATED_ARTIFACTS | {"manifest.json"}:
+            return None
+        path = self.settings.artifacts_path / project_id / "history" / revision / name
+        return path if path.is_file() else None
 
     def artifact_path(self, project_id: str, name: str) -> Path | None:
         if not self._is_project_id(project_id):
@@ -274,9 +334,14 @@ class ProjectStore:
         directory = self.settings.artifacts_path / project_id
         if not directory.exists():
             return []
-        return sorted(path.name for path in directory.iterdir() if path.is_file())
+        return sorted(
+            path.name for path in directory.iterdir()
+            if path.is_file() and not path.name.startswith(".")
+        )
 
-    def clear_generated_artifacts(self, project_id: str) -> None:
+    def clear_generated_artifacts(
+        self, project_id: str, names: frozenset[str] = GENERATED_ARTIFACTS
+    ) -> None:
         """重新运行前移除上一轮产物，同时保留用户上传的 source-* 资料。"""
 
         self._validate_project_id(project_id)
@@ -287,7 +352,7 @@ class ProjectStore:
             return
         paths = [
             path
-            for name in GENERATED_ARTIFACTS
+            for name in GENERATED_ARTIFACTS & names
             if (path := directory / name).is_file() or path.is_symlink()
         ]
         if not paths:

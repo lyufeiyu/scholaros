@@ -175,12 +175,26 @@ async function uploadFiles(projectId, files, role) {
   }
 }
 
+function updateIdeaLength() {
+  const input = element("idea");
+  const count = Array.from(input.value.trim()).length;
+  const limit = Number(input.dataset.maxLength);
+  const exceeded = count > limit;
+  element("ideaLength").textContent = `${count.toLocaleString("en-US")} / ${limit.toLocaleString("en-US")} 字符${exceeded ? " · 已超限，请精简后提交（输入内容已保留）" : ""}`;
+  input.setCustomValidity(exceeded ? `研究想法最多支持 ${limit.toLocaleString("en-US")} 个字符。` : "");
+  return !exceeded;
+}
+
 async function createProject(event) {
   event.preventDefault();
   const button = element("createButton");
   const feedback = element("createFeedback");
   const idea = element("idea").value.trim();
-  if (idea.length < 8) {
+  if (!updateIdeaLength()) {
+    element("idea").reportValidity();
+    return;
+  }
+  if (Array.from(idea).length < 8) {
     toast("研究想法至少需要 8 个字符。", true);
     return;
   }
@@ -191,10 +205,11 @@ async function createProject(event) {
     project = await api("/api/projects", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ idea, sources: selectedSources("createSources"), run_now: false }),
+      body: JSON.stringify({ idea, sources: selectedSources("createSources"), run_now: false, guided: element("guidedMode").checked }),
     });
     state.currentProject = project;
     renderProject(project);
+    element("historyList").replaceChildren();
     element("projectWorkspace").scrollIntoView({ behavior: "smooth", block: "start" });
     const sourceFiles = [...element("sourceFiles").files];
     const resultFiles = [...element("resultFiles").files];
@@ -279,7 +294,7 @@ function renderProject(project) {
   const percent = project.status === "created" ? 0 : Math.round((Math.max(finishedStages, project.status === "running" ? currentIndex + 0.35 : finishedStages) / stages.length) * 100);
   element("progressFill").style.width = `${Math.min(100, percent)}%`;
   element("progressPercent").textContent = `${Math.min(100, percent)}%`;
-  element("stageText").textContent = project.error || (isInterrupted ? "上次运行已中断，请重新运行" : stageLabels[project.stage] || "准备开始");
+  element("stageText").textContent = project.error || (isInterrupted ? "上次运行已中断，可从断点继续" : stageLabels[project.stage] || "准备开始");
   document.querySelectorAll("#stageList li").forEach((node, index) => {
     node.classList.toggle("is-done", index < finishedStages || project.stage === "completed");
     node.classList.toggle("is-current", project.status === "running" && index === currentIndex);
@@ -287,9 +302,29 @@ function renderProject(project) {
 
   const runButton = element("runProject");
   const needsSearchConfirmation = project.state?.search_confirmation_required === true;
+  const checkpoint = project.state?.pending_checkpoint;
   runButton.disabled = isActive;
-  runButton.hidden = isActive || needsSearchConfirmation;
-  runButton.textContent = project.status === "created" ? "开始运行" : "重新运行";
+  runButton.hidden = isActive || needsSearchConfirmation || Boolean(checkpoint);
+  runButton.textContent = project.status === "created" ? "开始运行" : "从头重新运行";
+  element("resumeProject").hidden = isActive || needsSearchConfirmation || Boolean(checkpoint)
+    || project.stage === "completed" || project.status === "created";
+  element("approveStage").hidden = isActive || !checkpoint;
+  element("rerunStageButton").disabled = isActive;
+  const rerunStage = element("rerunStage");
+  const latestRerunIndex = checkpoint ? stages.indexOf(checkpoint) : currentIndex;
+  for (const option of rerunStage.options) {
+    option.disabled = stages.indexOf(option.value) > latestRerunIndex;
+  }
+  const selectionContext = `${project.id}:${checkpoint || ""}`;
+  if (rerunStage.dataset.context !== selectionContext || rerunStage.selectedOptions[0]?.disabled) {
+    rerunStage.value = checkpoint || (project.stage === "completed" ? "designing" : project.stage);
+    rerunStage.dataset.context = selectionContext;
+  }
+  const checkpointPreview = element("checkpointPreview");
+  element("checkpointPanel").hidden = !checkpoint;
+  const key = { scoping: "spec", synthesizing: "evidence", designing: "design" }[checkpoint];
+  checkpointPreview.textContent = key ? JSON.stringify(project.state[key], null, 2)
+    : "请在研究制品中预览 paper-draft.md，确认初稿后继续质量检查。";
   element("uploadMore").disabled = project.status === "running";
   element("moreSourceFiles").disabled = project.status === "running";
   element("moreResultFiles").disabled = project.status === "running";
@@ -394,6 +429,7 @@ async function runCurrentProject() {
   const resumeConfirmedSearch = state.currentProject.stage === "searching"
     && state.currentProject.state?.search_plan_confirmed === true;
   const restart = state.currentProject.status !== "created" && !resumeConfirmedSearch;
+  if (restart && !window.confirm("将保存当前历史版本，然后从头重做所有阶段。只想恢复上次进度，请取消并选择“从断点继续”。")) return;
   setBusy(button, true, restart ? "正在重新启动…" : "正在启动…");
   try {
     await api(`/api/projects/${state.currentProject.id}/run?restart=${restart}`, { method: "POST" });
@@ -404,6 +440,50 @@ async function runCurrentProject() {
     toast(error.message, true);
   } finally {
     setBusy(button, false, "");
+  }
+}
+
+async function projectAction(action, buttonId) {
+  if (!state.currentProject) return;
+  const projectId = state.currentProject.id;
+  const button = element(buttonId);
+  setBusy(button, true, "正在处理…");
+  try {
+    await api(`/api/projects/${projectId}/${action}`, { method: "POST" });
+    if (state.currentProject?.id === projectId) {
+      await refreshCurrentProject();
+      startPolling();
+    }
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    setBusy(button, false, "");
+  }
+}
+
+async function loadHistory() {
+  if (!state.currentProject) return;
+  const projectId = state.currentProject.id;
+  try {
+    const history = await api(`/api/projects/${projectId}/history`);
+    if (state.currentProject?.id !== projectId) return;
+    const container = element("historyList");
+    container.replaceChildren();
+    if (!history.length) container.textContent = "尚无历史版本；首次重做前会自动保存。";
+    for (const revision of history) {
+      const row = document.createElement("p");
+      row.textContent = `${formatDate(revision.created_at)} · ${revision.reason} `;
+      for (const name of ["manifest.json", ...Object.keys(revision.artifacts)]) {
+        const link = document.createElement("a");
+        link.href = `/api/projects/${projectId}/history/${revision.revision}/${encodeURIComponent(name)}`;
+        link.textContent = ` ${name} `;
+        link.download = name;
+        row.append(link);
+      }
+      container.append(row);
+    }
+  } catch (error) {
+    toast(error.message, true);
   }
 }
 
@@ -430,8 +510,10 @@ async function rejectSearchPlan() {
     state.currentProject.idea,
   );
   if (revisedIdea === null) return;
-  if (revisedIdea.trim().length < 8) {
-    toast("研究说明至少需要 8 个字符。", true);
+  const revisedLength = Array.from(revisedIdea.trim()).length;
+  const limit = Number(element("idea").dataset.maxLength);
+  if (revisedLength < 8 || revisedLength > limit) {
+    toast(`研究说明需要 8—${limit.toLocaleString("en-US")} 个字符。`, true);
     return;
   }
   const button = element("rejectSearch");
@@ -737,6 +819,15 @@ function bindEvents() {
   element("refreshProjects").addEventListener("click", () => loadProjects().catch((error) => toast(error.message, true)));
   element("refreshProject").addEventListener("click", () => refreshCurrentProject().catch((error) => toast(error.message, true)));
   element("runProject").addEventListener("click", runCurrentProject);
+  element("resumeProject").addEventListener("click", () => projectAction("resume", "resumeProject"));
+  element("approveStage").addEventListener("click", () => projectAction("approve", "approveStage"));
+  element("loadHistory").addEventListener("click", loadHistory);
+  element("rerunStageButton").addEventListener("click", () => {
+    const stage = element("rerunStage").value;
+    if (window.confirm("将保存历史快照，然后重做所选阶段及其下游。是否继续？")) {
+      projectAction(`rerun?stage=${encodeURIComponent(stage)}`, "rerunStageButton");
+    }
+  });
   element("confirmSearch").addEventListener("click", confirmSearchPlan);
   element("rejectSearch").addEventListener("click", rejectSearchPlan);
   element("deleteProject").addEventListener("click", deleteCurrentProject);
@@ -746,6 +837,8 @@ function bindEvents() {
 
 async function init() {
   bindEvents();
+  element("idea").addEventListener("input", updateIdeaLength);
+  updateIdeaLength();
   updateSearchField();
   try {
     await Promise.all([loadHealth(), loadProjects()]);

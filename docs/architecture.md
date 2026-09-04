@@ -36,12 +36,13 @@ stateDiagram-v2
     Designing --> Drafting
     Drafting --> Reviewing
     Reviewing --> Revising
-    Revising --> Completed
-    Reviewing --> NeedsAttention: high-priority finding
-    NeedsAttention --> Scoping: restart after human revision
+    Revising --> Completed: checks passed
+    Revising --> NeedsAttention: unresolved findings
+    Scoping --> ScopeApproval: guided mode
+    ScopeApproval --> Searching: approved
 ```
 
-Each stage persists its current state before execution, then stores artifacts and events on completion. A crashed process can rerun from the current stage. A single paper-source failure is recorded without failing the complete workflow.
+Each stage persists its current state before execution, stores artifacts on completion, and advances the saved cursor. `resume` retries the interrupted stage without repeating completed upstream work; it does not bypass a pending confirmation. Optional guided mode pauses after scope, evidence, design, and drafting, with a separate outbound-search confirmation. See [Guided work and recovery](workflow.md) for all checkpoints and actions. A single paper-source failure is recorded; zero total results still stop a normal workflow.
 
 ## Runtime design choices
 
@@ -79,7 +80,7 @@ Multi-Agent behavior is defined by role objectives, capability permissions, inpu
 8. **Human authorization before outbound search:** PDFs are untrusted input. A project with source documents stores its title and query plan before contacting third parties, and waits for user confirmation. A rejected plan can revise the research description and return to scoping. Cross-language or sensitive phrases generate warnings rather than static keyword bans.
 9. **Safe grouped search:** outbound terms are checked for structure and topic relation; complementary query clusters retain coverage. A source that rate-limits or fails is not repeatedly hit in the same batch.
 10. **Empty-search stop:** a normal workflow stops before writing when no paper is found and exposes queries plus filter statistics. Only explicit offline demonstration mode can bypass this stop.
-11. **Artifact isolation on rerun:** restart keeps user-uploaded source material but removes prior generated artifacts, so an old draft cannot be mistaken for current output after a failed rerun.
+11. **Artifact isolation on rerun:** first snapshot project state and generated artifacts, then invalidate the selected stage and its downstream outputs. Upstream results and uploaded text remain. A full restart invalidates every generated stage; old versions remain under `history/` until the project is deleted.
 12. **Researcher final responsibility:** outputs are candidate plans and reviewable drafts. Original-source verification, method choice, experiments, interpretation, ethics, authorship, and submission remain human responsibilities.
 
 ## From MVP to research platform

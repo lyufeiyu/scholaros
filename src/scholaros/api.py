@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from scholaros import __version__
 from scholaros.config import Settings
-from scholaros.domain import ProjectStatus, SearchField
+from scholaros.domain import MAX_RESEARCH_IDEA_LENGTH, ProjectStatus, SearchField, Stage
 from scholaros.papers import (
     build_google_scholar_query,
     normalize_http_url,
@@ -29,9 +29,10 @@ STATIC_ROOT = Path(__file__).with_name("static")
 
 
 class ProjectCreate(BaseModel):
-    idea: str = Field(min_length=8, max_length=5000)
+    idea: str = Field(min_length=8, max_length=MAX_RESEARCH_IDEA_LENGTH)
     sources: list[str] = Field(default_factory=list)
     run_now: bool = True
+    guided: bool = False
 
 
 class SearchRequest(BaseModel):
@@ -46,7 +47,7 @@ class SearchRequest(BaseModel):
 
 
 class SearchPlanRevision(BaseModel):
-    idea: str | None = Field(default=None, min_length=8, max_length=5000)
+    idea: str | None = Field(default=None, min_length=8, max_length=MAX_RESEARCH_IDEA_LENGTH)
 
 
 @lru_cache(maxsize=1)
@@ -80,8 +81,8 @@ def create_app(workflow: ResearchWorkflow | None = None) -> FastAPI:
             project = flow.store.get_project(project_id)
             if project is None:
                 raise HTTPException(404, "项目不存在")
-            if project.status == ProjectStatus.RUNNING and not restart:
-                raise HTTPException(409, "上次运行已中断，请使用 restart=true 重新运行")
+            if project.status == ProjectStatus.RUNNING and not restart and before_schedule is None:
+                raise HTTPException(409, "上次运行已中断，请从断点继续（/resume），或使用 restart=true 从头重做")
             try:
                 flow.validate_sources(project.selected_sources)
             except ValueError as exc:
@@ -143,7 +144,7 @@ def create_app(workflow: ResearchWorkflow | None = None) -> FastAPI:
     async def create_project(request: ProjectCreate) -> dict[str, Any]:
         flow: ResearchWorkflow = app.state.workflow
         try:
-            project = flow.create_project(request.idea, request.sources)
+            project = flow.create_project(request.idea, request.sources, guided=request.guided)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         started = False
@@ -207,6 +208,49 @@ def create_app(workflow: ResearchWorkflow | None = None) -> FastAPI:
         if not started:
             raise HTTPException(409, "项目正在运行")
         return {"status": "accepted", "project_id": project_id}
+
+    def schedule_action(project_id: str, action: Callable[[], None]) -> dict[str, str]:
+        try:
+            started = schedule(project_id, before_schedule=action)
+        except KeyError as exc:
+            raise HTTPException(404, "项目不存在") from exc
+        except ProjectBusyError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        if not started:
+            raise HTTPException(409, "项目正在运行")
+        return {"status": "accepted", "project_id": project_id}
+
+    @app.post("/api/projects/{project_id}/resume", status_code=202)
+    async def resume_project(project_id: str) -> dict[str, str]:
+        flow: ResearchWorkflow = app.state.workflow
+        return schedule_action(project_id, lambda: flow.prepare_resume(project_id))
+
+    @app.post("/api/projects/{project_id}/rerun", status_code=202)
+    async def rerun_project(project_id: str, stage: Stage) -> dict[str, str]:
+        flow: ResearchWorkflow = app.state.workflow
+        return schedule_action(project_id, lambda: flow.prepare_rerun(project_id, stage))
+
+    @app.post("/api/projects/{project_id}/approve", status_code=202)
+    async def approve_project(project_id: str) -> dict[str, str]:
+        flow: ResearchWorkflow = app.state.workflow
+        return schedule_action(project_id, lambda: flow.approve_checkpoint(project_id))
+
+    @app.get("/api/projects/{project_id}/history")
+    async def history(project_id: str) -> list[dict[str, Any]]:
+        flow: ResearchWorkflow = app.state.workflow
+        if flow.store.get_project(project_id) is None:
+            raise HTTPException(404, "项目不存在")
+        return flow.store.list_history(project_id)
+
+    @app.get("/api/projects/{project_id}/history/{revision}/{name}")
+    async def history_artifact(project_id: str, revision: str, name: str) -> FileResponse:
+        flow: ResearchWorkflow = app.state.workflow
+        path = flow.store.history_artifact_path(project_id, revision, name)
+        if path is None:
+            raise HTTPException(404, "历史制品不存在")
+        return FileResponse(path, filename=name)
 
     @app.post("/api/projects/{project_id}/reject-search", status_code=202)
     async def reject_search_plan(

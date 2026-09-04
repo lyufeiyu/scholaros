@@ -7,6 +7,7 @@
 | 你想了解什么 | 文档 |
 |---|---|
 | 安装、Conda 环境、模型和密钥 | [环境配置](environment.md) |
+| 分步确认、局部重做和历史版本 | [分步研究与恢复](workflow.md) |
 | 代码如何组织、从哪里扩展 | [代码说明](code-guide.md) |
 | 状态机、Agent runtime 和数据流 | [架构思路](architecture.md) |
 | 研究者责任、AI 使用披露和质量检查边界 | [科研辅助与学术诚信](research-integrity.md) |

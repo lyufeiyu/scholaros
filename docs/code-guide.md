@@ -7,7 +7,7 @@
 ```text
 src/scholaros/
 ├── api.py          # FastAPI, Web entry point, background runs, upload/download
-├── cli.py          # run/search/show/serve commands
+├── cli.py          # run/search/show/serve and resume/approve/rerun/history commands
 ├── config.py       # environment configuration and project paths
 ├── domain.py       # project, stage, paper, evidence, and review domain objects
 ├── ingestion.py    # PDF/TXT/Markdown text ingestion
@@ -25,7 +25,7 @@ src/scholaros/
 ## Main call chain
 
 1. `ResearchWorkflow.create_project()` creates a project and its first event.
-2. `run()` resumes from the current `stage`; stage start and finish are persisted and emitted as events.
+2. `run()` executes from the current `stage`; `resume()` can recover a stale running status after acquiring the project lock. Completed stages advance the cursor, and pending checkpoints require explicit approval.
 3. `ResearchWriter.scope()` reads the idea and uploaded source excerpts. With source material, it must return a `source_basis` verbatim-verifiable within one excerpt. Before outbound search, terms are checked for length, control characters, URLs/identifiers, and topic relation.
 4. A project with source material first enters `search_confirmation_required` during SEARCHING. No external request is made until confirmation. `confirm_search_plan()` continues; `reject_search_plan()` may revise the idea and return to SCOPING. Chinese-to-English mappings and potentially sensitive but legitimate academic terms create human-review warnings rather than static bans.
 5. `PaperSearchService.search_many()` searches the first three complementary research phrases, rotates query clusters for minimum coverage, then deduplicates. Once a source returns a rate limit, authentication failure, or temporary error, the same batch does not immediately call it again. A normal workflow stops on zero results; only explicit offline mode may continue.
@@ -42,7 +42,7 @@ src/scholaros/
 - `python -m scholaros` and bare `scholaros` enter the terminal wizard.
 - `./scholaros.sh serve` starts the Web workspace; static assets ship inside the wheel.
 - Web project creation persists the project and optional uploads before starting a background run, preventing uploads from replacing a running snapshot.
-- Network actions surface API errors in the page. Project state updates through polling. Reruns use `restart=true`, retain user uploads, and remove generated artifacts from the previous run.
+- Network actions surface API errors in the page. Project state updates through polling. The UI distinguishes resume, guided approval, partial rerun, and full restart. Reruns snapshot old outputs before invalidating downstream stages; see [Guided work and recovery](workflow.md).
 
 See [Environment configuration](environment.md) for installation, update, validation, and troubleshooting.
 
@@ -89,7 +89,7 @@ Implement `TurnModel.turn(messages, tools) -> ModelTurn`. Vendor-format conversi
 ## Adding a workflow stage
 
 1. Add an enum member to `domain.Stage`.
-2. Add it to `ResearchWorkflow.stage_order`.
+2. Add it to `ResearchWorkflow.stage_order`, `stage_outputs`, and `stage_artifacts`; define whether it needs a guided checkpoint.
 3. Implement an idempotent branch in `_run_stages()` and persist its inputs and outputs.
 4. Add recovery and failure tests.
 
@@ -111,5 +111,6 @@ A multi-user production deployment should move to PostgreSQL, object storage, pr
 - `test_review.py`: in-text citations, evidence, method elements, responsibility statements, and result-value provenance.
 - `test_workflow.py`: offline end-to-end behavior, artifacts, events, reload, document priority, concurrent-write protection.
 - `test_api.py`: static page, project lifecycle, upload, restart parameters, running-state write protection.
+- `test_checkpoints.py`: guided approval, partial reruns, stale-state recovery, offline persistence, history snapshots, and atomic-write failures.
 
 Live network APIs are excluded from the stable test suite to avoid external volatility. Use the CLI separately for real-source smoke tests.

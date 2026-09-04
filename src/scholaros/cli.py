@@ -7,7 +7,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from scholaros.config import Settings
-from scholaros.domain import Project, SearchField
+from scholaros.domain import Project, SearchField, Stage
 from scholaros.papers import (
     build_google_scholar_query,
     paper_web_links,
@@ -50,6 +50,15 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--results", action="append", type=Path, default=[])
     run.add_argument("--offline", action="store_true", help="不联网检索，生成结构化演示稿")
     run.add_argument("--json", action="store_true", help="以 JSON 输出结果")
+    run.add_argument("--guided", action="store_true", help="在范围、证据、方法和初稿完成后等待确认")
+
+    for command, help_text in (("resume", "从当前断点继续"), ("approve", "确认引导阶段并继续"),
+                               ("history", "列出重做前保存的历史版本")):
+        action = subparsers.add_parser(command, help=help_text)
+        action.add_argument("project_id")
+    rerun = subparsers.add_parser("rerun", help="只重做指定阶段及其下游，保留历史版本")
+    rerun.add_argument("project_id")
+    rerun.add_argument("--from-stage", required=True, choices=[s.value for s in Stage if s != Stage.COMPLETED])
 
     search = subparsers.add_parser("search", help="跨源搜索论文")
     search.add_argument("query")
@@ -114,7 +123,7 @@ def main() -> None:
             workflow.search = PaperSearchService([])
             workflow.writer = ResearchWriter()
             workflow.allow_empty_search = True
-        project = workflow.create_project(args.idea, args.sources)
+        project = workflow.create_project(args.idea, args.sources, guided=args.guided)
         for document in args.document:
             workflow.add_document(project.id, document)
         for results in args.results:
@@ -130,7 +139,11 @@ def main() -> None:
                 )
             )
         else:
-            if result.state.get("search_confirmation_required"):
+            if result.state.get("pending_checkpoint"):
+                ui.info(f"阶段 {result.state['pending_checkpoint']} 等待确认。")
+                print(f"查看：scholaros show {result.id}")
+                print(f"继续：scholaros approve {result.id}")
+            elif result.state.get("search_confirmation_required"):
                 _print_pending_search_plan(result, ui)
             else:
                 ui.success(f"项目 {result.id}：{result.status.value}")
@@ -240,6 +253,20 @@ def main() -> None:
                     safe="",
                 )
             )
+    elif args.command in {"resume", "rerun", "approve", "history"}:
+        try:
+            if args.command == "history":
+                print(json.dumps(workflow.store.list_history(args.project_id), ensure_ascii=False, indent=2))
+                return
+            operation = (
+                workflow.resume(args.project_id) if args.command == "resume"
+                else workflow.approve_and_run(args.project_id) if args.command == "approve"
+                else workflow.rerun_from(args.project_id, args.from_stage)
+            )
+            result = asyncio.run(operation)
+            print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+        except (KeyError, ValueError, RuntimeError) as exc:
+            raise SystemExit(str(exc)) from exc
     elif args.command == "show":
         project = workflow.store.get_project(args.project_id)
         if project is None:

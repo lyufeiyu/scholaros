@@ -75,8 +75,10 @@
             <p>一句尚不成熟的想法也可以，ScholarOS 会给出可检验的候选规格，供研究者审阅和修订。</p>
           </div>
           <form id="createForm">
+            <label class="query-mode-option"><input id="guidedMode" type="checkbox"><span>引导模式：范围、证据、方法和初稿完成后，逐步确认再继续（不勾选则保持原有快速流程）</span></label>
             <label class="field-label" for="idea">研究想法或核心问题</label>
-            <textarea id="idea" name="idea" minlength="8" maxlength="5000" required placeholder="例如：如何评估多智能体科研助手对引用可靠性和研究设计质量的影响？"></textarea>
+            <textarea id="idea" name="idea" minlength="8" data-max-length="100000" aria-describedby="ideaLength" required placeholder="可以详细描述研究背景、核心问题、已有方法、创新点和约束条件。"></textarea>
+            <p id="ideaLength" class="form-feedback">0 / 100,000 字符</p>
             <div class="field-row">
               <div class="field-group grow">
                 <span class="field-label">论文来源</span>
@@ -120,8 +122,34 @@
               <button id="refreshProject" class="secondary-button" type="button">刷新状态</button>
               <button id="deleteProject" class="danger-button" type="button">删除项目</button>
               <button id="runProject" class="primary-button small" type="button">开始运行</button>
+              <button id="resumeProject" class="secondary-button" type="button" hidden>从断点继续</button>
+              <button id="approveStage" class="primary-button small" type="button" hidden>确认本阶段并继续</button>
             </div>
           </div>
+
+          <details class="advanced-options">
+            <summary>局部重做与历史版本</summary>
+            <p>重做前自动保存快照；只清理选定阶段及其下游，上游资料和结果保持不变。</p>
+            <label for="rerunStage">从哪个阶段重做</label>
+            <select id="rerunStage">
+              <option value="scoping">范围界定（全部重做）</option>
+              <option value="searching">跨源检索</option>
+              <option value="synthesizing">证据综合</option>
+              <option value="designing">方法设计</option>
+              <option value="drafting">研究稿起草</option>
+              <option value="reviewing">质量检查</option>
+              <option value="revising">辅助修订</option>
+            </select>
+            <button id="rerunStageButton" class="secondary-button" type="button">重做所选阶段</button>
+            <button id="loadHistory" class="secondary-button" type="button">查看历史版本</button>
+            <div id="historyList"></div>
+          </details>
+
+          <section id="checkpointPanel" class="search-confirmation" hidden>
+            <h4>检查本阶段结果</h4>
+            <p>确认后才会继续。需要重新生成时，可在“局部重做与历史版本”中选择当前阶段。</p>
+            <pre id="checkpointPreview"></pre>
+          </section>
 
           <div class="progress-card">
             <div class="progress-copy"><span id="stageText">准备开始</span><strong id="progressPercent">0%</strong></div>

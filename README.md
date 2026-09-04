@@ -8,7 +8,7 @@ A research assistant workspace for traceable evidence, method design, and writin
 
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](./LICENSE)
-[![Checks](https://img.shields.io/badge/checks-passing-2ea44f)](./scripts/check.sh)
+[![Checks](https://img.shields.io/badge/checks-run_locally-586069)](./scripts/check.sh)
 
 [Quick start](#quick-start) · [Features](#features) · [Search](#search) · [Architecture](#architecture-overview) · [Documentation](#documentation) · [Contributing](./CONTRIBUTING.md)
 
@@ -53,20 +53,19 @@ ScholarOS is a research assistance tool, not an autonomous paper author, and mus
 - Accepts PDF, TXT, and Markdown files as references or experimental result materials.
 - Searches arXiv, OpenAlex, Crossref, Semantic Scholar, DBLP, ACM metadata, and optional IEEE Xplore in parallel.
 - Supports topic, natural-language, exact title, author, DOI, and venue searches; author searches can combine affiliation, topic, and venue constraints.
-- Requires confirmation before sending search terms to external services and reports each source failure separately.
+- Shows a search-plan confirmation for projects with uploaded references and for guided projects; reports each source failure separately.
 - Runs nine deterministic checks on both the initial and revised draft: section structure, evidence availability, in-text citations, method elements, figure design, table design, result provenance, researcher-responsibility statement, and draft depth.
-- Persists project state and intermediate artifacts for inspection, reruns, and deletion.
+- Offers optional guided checkpoints, resumes interrupted work, and reruns a selected stage without repeating completed upstream work. Saves a history snapshot before reruns.
 
 ## Quick start
 
 ### 1. Create the Conda environment
 
-ScholarOS uses a Conda environment named `scholaros`; it does not create a second project-local Python environment:
+Create the `scholaros` Conda environment. Its definition also installs the project and development dependencies:
 
 ```bash
 conda env create -f environment.yml
 conda activate scholaros
-python -m pip install -e ".[dev]"
 ```
 
 If the environment already exists:
@@ -103,6 +102,22 @@ scholaros run "How can citation reliability in research agents be evaluated?" --
 ```
 
 `--offline` is an explicit no-network demonstration mode. For real research, configure a model and paper sources, then inspect the outbound search plan.
+
+### Work step by step
+
+Choose `g` in the terminal menu, or enable guided mode when creating a Web project. The workflow pauses after scope, evidence, method design, and the initial draft for your review. Search terms are confirmed separately before being sent to paper sources.
+
+```bash
+scholaros run "How can citation reliability in research agents be evaluated?" --guided
+scholaros show PROJECT_ID
+scholaros approve PROJECT_ID                       # approve the pending stage
+scholaros confirm-search PROJECT_ID                # approve outbound search terms
+scholaros resume PROJECT_ID                        # retry an interrupted stage
+scholaros rerun PROJECT_ID --from-stage designing  # keep scope, search, and evidence
+scholaros history PROJECT_ID
+```
+
+These are separate actions; use the command for the project's current state. Without `--guided`, the existing automatic flow remains available. This release supports stage-level review and reruns, not conversational editing of each section. See [Guided work and recovery](./docs/workflow.md) for details and history-storage limits.
 
 ### 4. Start without activating the environment
 
@@ -226,6 +241,7 @@ See [Paper-source permissions and compliance](./docs/permissions.md) for details
 
 - [Documentation index](./docs/README.md)
 - [Environment configuration](./docs/environment.md)
+- [Guided work and recovery](./docs/workflow.md)
 - [Architecture](./docs/architecture.md)
 - [Code guide](./docs/code-guide.md)
 - [Research assistance and academic integrity](./docs/research-integrity.md)

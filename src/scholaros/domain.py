@@ -5,6 +5,8 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
+MAX_RESEARCH_IDEA_LENGTH = 100_000
+
 
 def utc_now() -> str:
     return datetime.now(UTC).isoformat()

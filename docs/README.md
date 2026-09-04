@@ -7,6 +7,7 @@ Choose a document by task:
 | What you need | Document |
 |---|---|
 | Installation, Conda, models, and keys | [Environment configuration](environment.md) |
+| Guided checkpoints, partial reruns, and old versions | [Guided work and recovery](workflow.md) |
 | Code organization and extension points | [Code guide](code-guide.md) |
 | State machine, Agent runtime, and data flow | [Architecture](architecture.md) |
 | Researcher responsibility, AI disclosure, and quality-check boundaries | [Research assistance and academic integrity](research-integrity.md) |

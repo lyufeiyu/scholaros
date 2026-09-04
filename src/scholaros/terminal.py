@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import shlex
 import sys
 from pathlib import Path
@@ -116,8 +117,9 @@ def interactive(settings: Settings) -> None:
         print("  3  查看已有项目")
         print("  4  删除已有项目")
         print("  5  启动网页工作台")
+        print("  g  新建引导式研究项目")
         print("  q  退出")
-        choice = ui.choose("请选择", {"1", "2", "3", "4", "5", "q"})
+        choice = ui.choose("请选择", {"1", "2", "3", "4", "5", "g", "q"})
         if choice == "1":
             _create_project_wizard(settings, ui)
         elif choice == "2":
@@ -128,12 +130,14 @@ def interactive(settings: Settings) -> None:
             _delete_project_wizard(settings, ui)
         elif choice == "5":
             _serve(settings, ui)
+        elif choice == "g":
+            _create_project_wizard(settings, ui, guided=True)
         else:
             print("\n  再见。研究过程已保存在 .scholaros 中。\n")
             return
 
 
-def _create_project_wizard(settings: Settings, ui: TerminalUI) -> None:
+def _create_project_wizard(settings: Settings, ui: TerminalUI, *, guided: bool = False) -> None:
     ui.title("新建论文项目")
     while True:
         idea = ui.ask("研究想法或核心问题")
@@ -156,13 +160,28 @@ def _create_project_wizard(settings: Settings, ui: TerminalUI) -> None:
         workflow.writer = ResearchWriter()
         workflow.allow_empty_search = True
     try:
-        project = workflow.create_project(idea, sources)
+        project = workflow.create_project(idea, sources, guided=guided)
         for path in source_documents:
             workflow.add_document(project.id, path, role="source")
         for path in result_documents:
             workflow.add_document(project.id, path, role="results")
         result = asyncio.run(workflow.run(project.id))
-        while result.state.get("search_confirmation_required"):
+        while result.state.get("search_confirmation_required") or result.state.get("pending_checkpoint"):
+            if pending := result.state.get("pending_checkpoint"):
+                ui.title(f"阶段确认：{STAGE_LABELS.get(pending, pending)}")
+                key = {"scoping": "spec", "synthesizing": "evidence", "designing": "design"}.get(pending)
+                if key:
+                    print(json.dumps(result.state[key], ensure_ascii=False, indent=2))
+                else:
+                    ui.info(f"请先阅读：{workflow.store.artifact_path(project.id, 'paper-draft.md')}")
+                decision = ui.choose("y=确认继续；r=重做本阶段；q=保存并返回", {"y", "r", "q"})
+                if decision == "q":
+                    break
+                result = asyncio.run(
+                    workflow.approve_and_run(project.id) if decision == "y"
+                    else workflow.rerun_from(project.id, pending)
+                )
+                continue
             ui.title("确认外发检索计划")
             ui.info("以下词组尚未发送给任何第三方论文源：")
             for warning in result.state.get("search_plan_warnings", []):
@@ -426,3 +445,11 @@ def _show_result(workflow: ResearchWorkflow, project: Project, ui: TerminalUI) -
     ui.info(f"制品：{', '.join(artifacts) if artifacts else '无'}")
     if project.error:
         ui.error(project.error)
+    if project.state.get("pending_checkpoint"):
+        ui.info(f"确认继续：scholaros approve {project.id}")
+    elif project.state.get("search_confirmation_required"):
+        ui.info(f"确认检索：scholaros confirm-search {project.id}")
+    elif project.stage != Stage.COMPLETED:
+        ui.info(f"从断点继续：scholaros resume {project.id}")
+    ui.info(f"局部重做：scholaros rerun {project.id} --from-stage designing")
+    ui.info(f"历史版本：scholaros history {project.id}")

@@ -5,14 +5,21 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="ScholarOS：面向研究者的证据追踪、方法设计与写作辅助工作台">
   <title>ScholarOS · Research Assistant Workspace</title>
-  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/styles.css?v=0.2.1">
 </head>
 <body>
   <div class="app-shell">
     <aside class="sidebar">
       <a class="brand" href="/" aria-label="ScholarOS 首页">
-        <span class="brand-mark">S</span>
-        <span><strong>ScholarOS</strong><small>Research Workspace</small></span>
+        <span class="brand-mark" aria-hidden="true">
+          <svg class="brand-icon" viewBox="0 0 24 24" focusable="false">
+            <path d="M6 4.5h7.5L18 9v10.5H6z"></path>
+            <path d="M13.5 4.5V9H18M8.5 13h7M8.5 16h4.5"></path>
+            <circle cx="18.2" cy="17.7" r="2.2"></circle>
+            <path d="m16.6 19.3-1.4 1.4"></path>
+          </svg>
+        </span>
+        <span><strong>ScholarOS <span id="brandVersion" class="brand-version">v0.2.1</span></strong><small>Research Workspace</small></span>
       </a>
 
       <nav class="primary-nav" aria-label="主导航">
@@ -58,14 +65,7 @@
         <div class="hero-grid">
           <div class="hero-copy">
             <span class="hero-kicker">QUESTION → EVIDENCE → METHOD</span>
-            <h2>让研究过程<br>留下可核验的证据链。</h2>
             <p>从问题收敛、跨源检索、证据账本到方法与草稿辅助，每一步都可恢复、可检查，并由研究者确认。</p>
-          </div>
-          <div class="hero-stat-grid" aria-label="核心能力">
-            <div><strong>7</strong><span>研究阶段</span></div>
-            <div><strong>7</strong><span>论文来源</span></div>
-            <div><strong>9 类</strong><span>质量检查</span></div>
-            <div><strong>MD</strong><span>开放制品</span></div>
           </div>
         </div>
 
@@ -75,15 +75,100 @@
             <p>一句尚不成熟的想法也可以，ScholarOS 会给出可检验的候选规格，供研究者审阅和修订。</p>
           </div>
           <form id="createForm">
-            <label class="query-mode-option"><input id="guidedMode" type="checkbox"><span>引导模式：范围、证据、方法和初稿完成后，逐步确认再继续（不勾选则保持原有快速流程）</span></label>
-            <label class="field-label" for="idea">研究想法或核心问题</label>
-            <textarea id="idea" name="idea" minlength="8" data-max-length="100000" aria-describedby="ideaLength" required placeholder="可以详细描述研究背景、核心问题、已有方法、创新点和约束条件。"></textarea>
-            <p id="ideaLength" class="form-feedback">0 / 100,000 字符</p>
-            <div class="field-row">
-              <div class="field-group grow">
-                <span class="field-label">论文来源</span>
-                <div id="createSources" class="source-options" aria-label="选择论文来源"></div>
+            <div class="intake-grid">
+              <fieldset class="idea-block">
+                <legend>研究想法或核心问题</legend>
+                <textarea id="idea" name="idea" minlength="8" data-max-length="100000" aria-label="研究想法或核心问题" aria-describedby="ideaLength" required placeholder="可以详细描述研究背景、核心问题、已有方法、创新点和约束条件。"></textarea>
+                <p id="ideaLength" class="form-feedback">0 / 100,000 字符</p>
+                <label class="query-mode-option"><input id="guidedMode" type="checkbox"><span>引导模式：逐步确认范围、证据、方法和初稿</span></label>
+              </fieldset>
+            <fieldset class="configuration-fieldset">
+              <legend><span>研究任务配置</span><small>现在确认，后续仍可调整并保留历史版本</small></legend>
+              <div class="configuration-grid">
+                <label>本次工作
+                  <select id="workflowType">
+                    <option value="build_from_materials">由材料形成论文</option>
+                    <option value="rewrite_existing">重写已有稿件</option>
+                    <option value="audit">科研诚信与证据核查</option>
+                    <option value="review">独立审阅</option>
+                    <option value="revise">按意见返修</option>
+                    <option value="transfer">适配新期刊 / 会议</option>
+                  </select>
+                </label>
+                <label>使用场景
+                  <select id="sceneType">
+                    <option value="journal">期刊论文</option>
+                    <option value="conference">会议论文</option>
+                    <option value="report">研究报告</option>
+                    <option value="review">综述</option>
+                    <option value="competition">科研竞赛</option>
+                    <option value="other">其他</option>
+                  </select>
+                </label>
+                <label>目标名称
+                  <input id="targetName" maxlength="200" placeholder="暂未确定可留空">
+                </label>
+                <label>输出语言
+                  <select id="outputLanguage">
+                    <option value="zh">中文</option>
+                    <option value="en">英文</option>
+                    <option value="multilingual">中英双语</option>
+                    <option value="other">其他 / 跟随材料</option>
+                  </select>
+                </label>
+                <label>研究分析边界
+                  <select id="researchMode">
+                    <option value="agent_decide">由系统结合材料判断</option>
+                    <option value="required">需要新增研究分析</option>
+                    <option value="materials_only">只使用已有材料与结果</option>
+                  </select>
+                </label>
+                <label>交付范围
+                  <select id="requestedScope">
+                    <option value="manuscript">论文稿件</option>
+                    <option value="local_delivery" selected>完整本地稿包</option>
+                    <option value="submission_package">投稿材料包（作者自行投稿）</option>
+                  </select>
+                </label>
+                <label>作者表达
+                  <select id="authorVoice">
+                    <option value="off">不特别保留</option>
+                    <option value="standard" selected>适度保留</option>
+                    <option value="strict">严格保留</option>
+                  </select>
+                </label>
+                <label>机制 / 架构图
+                  <select id="mechanismFigure">
+                    <option value="prefer">优先考虑</option>
+                    <option value="auto">由系统判断</option>
+                    <option value="omit">不采用</option>
+                  </select>
+                </label>
+                <label>同方向学习篇数<input id="sameFieldPapers" type="number" min="1" max="50" value="3"></label>
+                <label>目标场景学习篇数<input id="targetVenuePapers" type="number" min="1" max="50" value="3"></label>
+                <label>参考文献目标
+                  <select id="referenceCountMode">
+                    <option value="venue_average">参考目标样本</option>
+                    <option value="custom">自定义数量</option>
+                  </select>
+                </label>
+                <label>自定义参考文献数量<input id="referenceCount" type="number" min="1" max="500" placeholder="选择自定义时填写" disabled></label>
               </div>
+              <div class="format-options" aria-label="交付格式">
+                <span>交付格式</span>
+                <label><input type="checkbox" name="deliveryFormats" value="md" checked> Markdown</label>
+                <label><input type="checkbox" name="deliveryFormats" value="docx" checked> Word</label>
+                <label><input type="checkbox" name="deliveryFormats" value="tex" checked> LaTeX</label>
+                <label><input type="checkbox" name="deliveryFormats" value="pdf" checked> PDF</label>
+              </div>
+            </fieldset>
+            </div>
+            <div class="source-picker">
+              <div class="source-picker-heading">
+                <div><span class="field-label">论文来源</span><small>选择本次研究允许使用的外部题录来源</small></div>
+                <span class="source-picker-note">可多选</span>
+              </div>
+              <div id="createSources" class="source-options" aria-label="选择论文来源"></div>
             </div>
             <details class="advanced-options">
               <summary>添加已有资料或真实实验结果 <span>可选</span></summary>
@@ -91,14 +176,14 @@
                 <label class="file-drop">
                   <span class="file-icon">文</span>
                   <strong>参考资料</strong>
-                  <small>PDF / TXT / Markdown，可多选</small>
-                  <input id="sourceFiles" type="file" accept=".pdf,.txt,.md,.markdown" multiple>
+                  <small>PDF / Word / Markdown / LaTeX / CSV / JSON</small>
+                  <input id="sourceFiles" type="file" accept=".pdf,.docx,.txt,.md,.markdown,.tex,.bib,.csv,.json" multiple>
                 </label>
                 <label class="file-drop result-drop">
                   <span class="file-icon">数</span>
                   <strong>真实结果资料</strong>
                   <small>有数据时才生成结果性结论</small>
-                  <input id="resultFiles" type="file" accept=".pdf,.txt,.md,.markdown" multiple>
+                  <input id="resultFiles" type="file" accept=".pdf,.docx,.txt,.md,.markdown,.tex,.bib,.csv,.json" multiple>
                 </label>
               </div>
             </details>
@@ -179,19 +264,72 @@
             </div>
           </section>
 
-          <div class="workspace-grid">
-            <section class="subpanel">
+          <div class="workspace-grid v2-workbench-grid">
+            <section id="configurationWorkbench" class="subpanel workbench-section">
+              <div class="subpanel-heading"><h4>项目配置</h4><span>Intake</span></div>
+              <div id="configurationSummary" class="configuration-summary"></div>
+              <div class="configuration-actions"><button id="copyConfiguration" class="secondary-button" type="button">复制配置摘要</button><button id="toggleConfigurationEditor" class="secondary-button" type="button">修改配置</button></div>
+              <form id="projectConfigurationForm" class="project-configuration-form" hidden>
+                <div class="configuration-grid compact-grid">
+                  <label>工作类型<select id="projectWorkflowType"><option value="build_from_materials">由材料形成论文</option><option value="rewrite_existing">重写已有稿件</option><option value="audit">科研诚信与证据核查</option><option value="review">独立审阅</option><option value="revise">按意见返修</option><option value="transfer">适配新目标</option></select></label>
+                  <label>使用场景<select id="projectSceneType"><option value="journal">期刊</option><option value="conference">会议</option><option value="report">报告</option><option value="review">综述</option><option value="competition">竞赛</option><option value="other">其他</option></select></label>
+                  <label>目标名称<input id="projectTargetName" maxlength="200"></label>
+                  <label>输出语言<select id="projectOutputLanguage"><option value="zh">中文</option><option value="en">英文</option><option value="multilingual">中英双语</option><option value="other">其他</option></select></label>
+                  <label>研究边界<select id="projectResearchMode"><option value="agent_decide">由系统判断</option><option value="required">需要新增分析</option><option value="materials_only">只用已有材料</option></select></label>
+                  <label>交付范围<select id="projectRequestedScope"><option value="manuscript">论文稿件</option><option value="local_delivery">完整本地稿包</option><option value="submission_package">投稿材料包</option></select></label>
+                  <label>作者表达<select id="projectAuthorVoice"><option value="off">不特别保留</option><option value="standard">适度保留</option><option value="strict">严格保留</option></select></label>
+                  <label>机制 / 架构图<select id="projectMechanismFigure"><option value="prefer">优先考虑</option><option value="auto">由系统判断</option><option value="omit">不采用</option></select></label>
+                  <label>同方向篇数<input id="projectSameFieldPapers" type="number" min="1" max="50"></label>
+                  <label>目标场景篇数<input id="projectTargetVenuePapers" type="number" min="1" max="50"></label>
+                  <label>参考文献目标<select id="projectReferenceCountMode"><option value="venue_average">参考目标样本</option><option value="custom">自定义数量</option></select></label>
+                  <label>自定义数量<input id="projectReferenceCount" type="number" min="1" max="500"></label>
+                </div>
+                <div class="format-options"><span>格式</span><label><input type="checkbox" name="projectDeliveryFormats" value="md"> MD</label><label><input type="checkbox" name="projectDeliveryFormats" value="docx"> Word</label><label><input type="checkbox" name="projectDeliveryFormats" value="tex"> TeX</label><label><input type="checkbox" name="projectDeliveryFormats" value="pdf"> PDF</label></div>
+                <button id="saveConfiguration" class="primary-button small" type="submit">保存配置</button>
+              </form>
+            </section>
+            <section id="materialsWorkbench" class="subpanel workbench-section">
+              <div class="subpanel-heading"><h4>材料清单</h4><span>Local first</span></div>
+              <div id="materialInventory" class="material-inventory"><p class="muted">尚未上传材料。</p></div>
+              <div class="inline-upload">
+                <label>补充参考资料<input id="moreSourceFiles" type="file" accept=".pdf,.docx,.txt,.md,.markdown,.tex,.bib,.csv,.json" multiple></label>
+                <label>补充真实结果<input id="moreResultFiles" type="file" accept=".pdf,.docx,.txt,.md,.markdown,.tex,.bib,.csv,.json" multiple></label>
+                <button id="uploadMore" class="secondary-button" type="button">上传所选资料</button>
+              </div>
+            </section>
+            <section id="contributionWorkbench" class="subpanel workbench-section full-width">
+              <div class="subpanel-heading"><h4>贡献方向</h4><span>Choose with trade-offs</span></div>
+              <div id="contributionOptions" class="choice-card-grid"><p class="muted">范围界定后生成候选。</p></div>
+            </section>
+            <section id="evidenceWorkbench" class="subpanel workbench-section">
+              <div class="subpanel-heading"><h4>证据与学习计划</h4><span>Evidence</span></div>
+              <div id="evidenceSummary" class="evidence-summary"><p class="muted">检索后显示证据覆盖。</p></div>
+            </section>
+            <section id="draftWorkbench" class="subpanel workbench-section">
               <div class="subpanel-heading"><h4>研究制品</h4><span>Artifacts</span></div>
               <div id="artifactList" class="artifact-list"><p class="muted">尚未生成制品。</p></div>
             </section>
-            <section class="subpanel">
+            <section id="figureWorkbench" class="subpanel workbench-section full-width">
+              <div class="subpanel-heading"><h4>图件故事板</h4><span>Media can be added later</span></div>
+              <div id="figureStory" class="figure-story"><p class="muted">方法设计完成后生成图件职责与占位。</p></div>
+            </section>
+            <section id="reviewWorkbench" class="subpanel workbench-section">
               <div class="subpanel-heading"><h4>质量与资料</h4><span>Quality checks</span></div>
               <div id="reviewSummary" class="review-summary"><p class="muted">修订完成后显示质量检查报告。</p></div>
-              <div class="inline-upload">
-                <label>补充参考资料<input id="moreSourceFiles" type="file" accept=".pdf,.txt,.md,.markdown" multiple></label>
-                <label>补充真实结果<input id="moreResultFiles" type="file" accept=".pdf,.txt,.md,.markdown" multiple></label>
-                <button id="uploadMore" class="secondary-button" type="button">上传所选资料</button>
-              </div>
+            </section>
+            <section id="deliveryWorkbench" class="subpanel workbench-section">
+              <div class="subpanel-heading"><h4>交付中心</h4><span>Delivery</span></div>
+              <div id="deliverySummary" class="delivery-summary"><p class="muted">完成稿生成后可准备可验证的本地交付包。</p></div>
+              <button id="prepareDelivery" class="primary-button small" type="button">准备交付包</button>
+            </section>
+            <section class="subpanel workbench-section full-width feedback-workbench">
+              <div class="subpanel-heading"><h4>意见与同任务返修</h4><span>Feedback</span></div>
+              <form id="feedbackForm" class="feedback-form">
+                <select id="feedbackScope" aria-label="反馈范围"><option value="manuscript">稿件</option><option value="figures">图件</option><option value="all">整项工作</option></select>
+                <textarea id="feedbackText" minlength="2" maxlength="32000" placeholder="描述希望修改的内容；返修前会自动保存当前版本。" required></textarea>
+                <button id="submitFeedback" class="primary-button small" type="submit">保存并开始返修</button>
+              </form>
+              <div id="feedbackHistory" class="feedback-history"></div>
             </section>
           </div>
 
@@ -208,7 +346,6 @@
       <section id="searchView" class="view">
         <div class="search-heading">
           <span class="eyebrow">DISCOVER WITH TRACEABILITY</span>
-          <h2>跨源论文检索</h2>
           <p>系统先从勾选来源获取候选，再严格核验作者、完整标题、DOI 或期刊/会议；综合主题按有效词项覆盖率过滤宽泛结果，并按 DOI 或标题去重。</p>
         </div>
         <section class="panel search-panel">
@@ -249,10 +386,17 @@
               <span><strong>自然语言理解</strong><small>勾选后先用已配置模型转换为英文学术检索词；无模型时会明确提示。搜索准确标题或缩写时不要勾选</small></span>
             </label>
             <div id="searchSources" class="source-options compact-options"></div>
+            <div class="venue-source-picker">
+              <div class="source-picker-heading">
+                <span class="field-label">AI 顶会来源</span>
+                <small>默认全选，点击只切换来源，不会改写检索框</small>
+              </div>
+              <div id="venueSources" class="source-options" aria-label="选择 AI 顶会来源"></div>
+            </div>
           </form>
         </section>
         <div class="search-feedback-row">
-          <div id="searchFeedback" class="search-feedback muted">输入检索内容后开始搜索。</div>
+          <div id="searchFeedback" class="search-feedback muted" role="status" aria-live="polite">输入检索内容后开始搜索。</div>
           <a id="googleScholarLink" class="scholar-link" href="#" target="_blank" rel="noreferrer noopener" hidden>在 Google Scholar 手动补充检索 ↗</a>
         </div>
         <section id="searchPlan" class="search-plan" aria-live="polite" hidden></section>
@@ -262,6 +406,6 @@
   </div>
 
   <div id="toast" class="toast" role="alert" aria-live="assertive"></div>
-  <script src="/static/app.js" defer></script>
+  <script src="/static/app.js?v=0.2.1" defer></script>
 </body>
 </html>

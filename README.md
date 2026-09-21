@@ -20,7 +20,7 @@ ScholarOS organizes research assistance into seven recoverable stages and stores
 Question → Scope → Search → Evidence → Design → Draft → Review → Revision
 ```
 
-The terminal CLI, and Web workspace share the same workflow. ScholarOS produces candidate research designs, evidence records, and research drafts; final judgment and academic responsibility remain with the researcher. When no experimental data is supplied, it produces a research protocol and figure/table design notes rather than invented results.
+The terminal CLI and Web workspace share the same workflow. ScholarOS produces candidate research designs, evidence records, and research drafts; final judgment and academic responsibility remain with the researcher. When no experimental data is supplied, it produces a research protocol and figure/table design notes rather than invented results.
 
 ## Screenshots
 
@@ -50,12 +50,15 @@ ScholarOS is a research assistance tool, not an autonomous paper author, and mus
 ## Features
 
 - Assists with problem definition, hypotheses, method design, evidence ledgers, and Markdown research drafts.
-- Accepts PDF, TXT, and Markdown files as references or experimental result materials.
+- Supports six work types: build from materials, rewrite, integrity audit, independent review, revision, and target transfer. Project configuration records venue/scene, language, research boundary, author voice, learning targets, reference target, figure policy, and delivery formats.
+- Accepts PDF, DOCX, TXT, Markdown, TeX, BibTeX, CSV, and JSON as references or experimental result materials.
 - Searches arXiv, OpenAlex, Crossref, Semantic Scholar, DBLP, ACM metadata, and optional IEEE Xplore in parallel.
 - Supports topic, natural-language, exact title, author, DOI, and venue searches; author searches can combine affiliation, topic, and venue constraints.
 - Shows a search-plan confirmation for projects with uploaded references and for guided projects; reports each source failure separately.
 - Runs nine deterministic checks on both the initial and revised draft: section structure, evidence availability, in-text citations, method elements, figure design, table design, result provenance, researcher-responsibility statement, and draft depth.
 - Offers optional guided checkpoints, resumes interrupted work, and reruns a selected stage without repeating completed upstream work. Saves a history snapshot before reruns.
+- Keeps bounded contribution and figure decisions in the same project, accepts revision feedback without opening a new project, and marks affected downstream artifacts stale until they are regenerated.
+- Prepares editable Markdown, DOCX, and LaTeX outputs plus a hash manifest and local ZIP. PDF remains explicitly missing unless a real PDF artifact exists; delivery never means automatic submission.
 
 ## Quick start
 
@@ -115,6 +118,7 @@ scholaros confirm-search PROJECT_ID                # approve outbound search ter
 scholaros resume PROJECT_ID                        # retry an interrupted stage
 scholaros rerun PROJECT_ID --from-stage designing  # keep scope, search, and evidence
 scholaros history PROJECT_ID
+scholaros delivery PROJECT_ID                      # build editable outputs and a local package
 ```
 
 These are separate actions; use the command for the project's current state. Without `--guided`, the existing automatic flow remains available. This release supports stage-level review and reruns, not conversational editing of each section. See [Guided work and recovery](./docs/workflow.md) for details and history-storage limits.
@@ -169,7 +173,7 @@ Results include a landing page, DOI link, and open PDF link when available. Scho
 scholaros serve
 ```
 
-Open `http://127.0.0.1:8000`; API documentation is available at `/docs`. The Web workspace supports project creation, document upload, outbound search-plan confirmation, stage monitoring, artifact download, safe reruns, and project deletion.
+Open `http://127.0.0.1:8000`; API documentation is available at `/docs`. The Web workspace supports full project intake, document upload, contribution choices, outbound search-plan confirmation, stage monitoring, figure storyboards, feedback-driven revision, delivery packaging, artifact download, safe reruns, and project deletion. See [Project workbench and delivery](./docs/workbench.md).
 
 ## Project data and output
 
@@ -179,7 +183,7 @@ ScholarOS stores local data in `.scholaros/` by default:
 .scholaros/
 ├── scholaros.db          # projects, state, and events
 └── artifacts/
-    └── <project-id>/     # uploaded text, search records, and paper.md
+    └── <project-id>/     # uploaded text, JSON records, drafts, editable exports, and delivery ZIP
 ```
 
 Both `.scholaros/` and `.env` are ignored by Git. Before publishing code, filing an issue, or sharing logs, still check that they contain no private papers, personal information, or secrets.
@@ -242,6 +246,7 @@ See [Paper-source permissions and compliance](./docs/permissions.md) for details
 - [Documentation index](./docs/README.md)
 - [Environment configuration](./docs/environment.md)
 - [Guided work and recovery](./docs/workflow.md)
+- [Project workbench and delivery](./docs/workbench.md)
 - [Architecture](./docs/architecture.md)
 - [Code guide](./docs/code-guide.md)
 - [Research assistance and academic integrity](./docs/research-integrity.md)

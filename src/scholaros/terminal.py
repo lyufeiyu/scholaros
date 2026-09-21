@@ -247,7 +247,7 @@ def _search_wizard(settings: Settings, ui: TerminalUI) -> None:
         author_venue = ui.ask("期刊/会议（支持 CVPR、AAAI、NIPS/NeurIPS 等简称）") or None
     sources_text = ui.ask(
         "论文源（回车=全部默认源；也可填单个或逗号分隔多个）",
-        "arxiv,openalex,crossref,dblp,acm,ieee",
+        "arxiv,openalex,crossref,dblp,acm,ieee,ieee_metadata",
     )
     sources = [item.strip() for item in sources_text.split(",") if item.strip()]
     workflow = ResearchWorkflow(settings)

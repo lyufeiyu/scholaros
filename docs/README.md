@@ -8,6 +8,7 @@ Choose a document by task:
 |---|---|
 | Installation, Conda, models, and keys | [Environment configuration](environment.md) |
 | Guided checkpoints, partial reruns, and old versions | [Guided work and recovery](workflow.md) |
+| Work types, project configuration, figure decisions, feedback, and delivery | [Project workbench and delivery](workbench.md) |
 | Code organization and extension points | [Code guide](code-guide.md) |
 | State machine, Agent runtime, and data flow | [Architecture](architecture.md) |
 | Researcher responsibility, AI disclosure, and quality-check boundaries | [Research assistance and academic integrity](research-integrity.md) |

@@ -47,7 +47,7 @@ Use **Partial rerun and history** in the Web workspace to browse and download ol
 
 ## API and compatibility
 
-`POST /api/projects` accepts `guided: true`; omitting it preserves the previous behavior. Project actions are `POST /api/projects/{id}/resume`, `/approve`, and `/rerun?stage=designing`. History is available through `GET /api/projects/{id}/history` and `/history/{revision}/{name}`. The existing `/run?restart=true` endpoint remains available and now snapshots the old version first.
+`POST /api/projects` accepts `guided: true` and an optional `configuration` object; omitting them preserves the previous behavior. Configuration can be updated with `PUT /api/projects/{id}/configuration`. Contribution and figure choices use `POST /api/projects/{id}/decisions`; revision notes use `/feedback`; editable exports and the verified local package use `/delivery`. Project actions remain `POST /api/projects/{id}/resume`, `/approve`, and `/rerun?stage=designing`. History is available through `GET /api/projects/{id}/history` and `/history/{revision}/{name}`. The existing `/run?restart=true` endpoint remains available and now snapshots the old version first. See [Project workbench and delivery](workbench.md) for the user-facing model.
 
 New projects store checkpoint metadata in the existing project JSON; no database migration is needed. Older projects without that metadata remain automatic projects. New explicit offline projects stay offline when reopened, resumed, or rerun, including through the Web API. For older offline projects that did not record this flag, create a new offline demo instead of assuming their mode can be inferred.
 

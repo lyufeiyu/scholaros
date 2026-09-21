@@ -50,12 +50,15 @@ ScholarOS 是科研辅助工具，不是自动论文作者，也不应被用于�
 ## 功能
 
 - 辅助形成问题定义、假设、方法设计、证据账本和 Markdown 研究草稿。
-- 将 PDF、TXT 和 Markdown 作为参考资料或实验结果加入项目。
+- 支持由材料成稿、重写、科研诚信核查、独立审阅、按意见返修和适配新目标六类任务；项目配置记录目标场景、语言、研究边界、作者表达、学习篇数、参考文献目标、图件策略和交付格式。
+- 将 PDF、DOCX、TXT、Markdown、TeX、BibTeX、CSV 和 JSON 作为参考资料或实验结果加入项目。
 - 并行检索 arXiv、OpenAlex、Crossref、Semantic Scholar、DBLP、ACM 元数据和可选 IEEE Xplore。
 - 支持综合主题、自然语言、标题、作者、DOI 和期刊/会议检索；作者条件可叠加机构、主题和会议。
 - 上传参考资料的项目和引导式项目在外发检索词前等待确认，并单独报告每个论文源的失败原因。
 - 对初稿和修订稿执行 9 类确定性质量检查：章节结构、证据、引用、方法要素、图设计、表设计、结果来源、研究者责任声明和正文完整度。
 - 可选逐步确认；中断后从断点继续，或只重做指定阶段及其后续步骤，保留上游成果。重做前自动保存历史快照。
+- 在同一项目保存贡献方向和图件取舍，接收返修意见；影响下游的变化会将旧制品标为待更新，继续运行后再替换。
+- 生成 Markdown、DOCX、LaTeX 可编辑稿、哈希清单和本地 ZIP；没有真实 PDF 时明确列为缺失，也不会自动投稿或发布。
 
 ## 快速开始
 
@@ -117,6 +120,7 @@ scholaros confirm-search PROJECT_ID                # 确认外发检索词
 scholaros resume PROJECT_ID                        # 重试中断的阶段
 scholaros rerun PROJECT_ID --from-stage designing  # 保留范围、检索和证据
 scholaros history PROJECT_ID
+scholaros delivery PROJECT_ID                      # 生成可编辑格式与本地交付包
 ```
 
 这些是分别使用的操作，请按项目当前状态选择。不加 `--guided` 仍按原来的自动流程运行。当前支持阶段级检查和重做，尚不支持逐章对话编辑。完整操作和历史存储边界见[分步研究与恢复](./docs/zh-CN/workflow.md)。
@@ -171,7 +175,7 @@ scholaros search "10.1145/1234567" --field doi --source acm
 scholaros serve
 ```
 
-浏览器打开 `http://127.0.0.1:8000`，API 文档位于 `/docs`。Web 工作台支持创建项目、上传资料、确认外发检索计划、查看阶段状态、下载研究制品和安全重跑/删除项目。
+浏览器打开 `http://127.0.0.1:8000`，API 文档位于 `/docs`。Web 工作台支持完整任务配置、上传资料、贡献选择、确认外发检索计划、查看阶段状态、图件故事板、同任务返修、交付打包、下载制品和安全重跑/删除项目。详见[项目工作台与交付](./docs/zh-CN/workbench.md)。
 
 ## 项目数据与输出
 
@@ -181,7 +185,7 @@ ScholarOS 默认将本地数据保存在 `.scholaros/`：
 .scholaros/
 ├── scholaros.db          # 项目、状态和事件
 └── artifacts/
-    └── <project-id>/     # 上传资料、检索记录和 paper.md
+    └── <project-id>/     # 上传文本、JSON 记录、稿件、可编辑导出与交付 ZIP
 ```
 
 该目录和 `.env` 均已加入 `.gitignore`。发布代码、提交 Issue 或分享日志前，仍应检查其中是否包含未公开论文、个人信息或密钥。
@@ -244,6 +248,7 @@ python -m pip install -e ".[dev]"
 - [文档索引](./docs/zh-CN/README.md)
 - [环境配置](./docs/zh-CN/environment.md)
 - [分步研究与恢复](./docs/zh-CN/workflow.md)
+- [项目工作台与交付](./docs/zh-CN/workbench.md)
 - [架构思路](./docs/zh-CN/architecture.md)
 - [代码说明](./docs/zh-CN/code-guide.md)
 - [科研辅助与学术诚信](./docs/zh-CN/research-integrity.md)

@@ -21,8 +21,8 @@ flowchart TB
     RT --> LLM["OpenAI-compatible model"]
     LS --> SRC["arXiv / OpenAlex / Crossref / Semantic Scholar / DBLP / ACM / IEEE"]
     WF --> STORE["SQLite projects and events"]
-    WF --> ART["JSON / Markdown artifacts"]
-    ING["PDF / TXT / MD"] --> WF
+    WF --> ART["JSON / Markdown / DOCX / TeX / ZIP artifacts"]
+    ING["PDF / DOCX / text and data files"] --> WF
 ```
 
 ## Seven-stage research state machine
@@ -75,7 +75,7 @@ Multi-Agent behavior is defined by role objectives, capability permissions, inpu
 3. **Metadata/full-text separation:** a DOI or abstract does not imply authorized full-text access.
 4. **Result integrity:** without `results` material, the output is a registered-report-style draft; result values must be located in uploaded result material or the check fails.
 5. **Deterministic checks:** initial and revised drafts are checked for structure, evidence, in-text citation consistency, method reproducibility elements, figure design, table design, result provenance, researcher responsibility, and draft depth.
-6. **Artifact-first workflow:** each stage emits JSON or Markdown that users can inspect, edit, and version.
+6. **Artifact-first workflow:** each stage emits inspectable JSON or Markdown; delivery can additionally derive editable DOCX and TeX plus a hash manifest and a ZIP that excludes original uploads.
 7. **Source-topic anchoring:** uploaded source material participates in scoping, and a phrase verifiable in one source excerpt prevents acronym collisions from changing the domain; filenames and cross-document concatenation are not evidence.
 8. **Human authorization before outbound search:** PDFs are untrusted input. A project with source documents stores its title and query plan before contacting third parties, and waits for user confirmation. A rejected plan can revise the research description and return to scoping. Cross-language or sensitive phrases generate warnings rather than static keyword bans.
 9. **Safe grouped search:** outbound terms are checked for structure and topic relation; complementary query clusters retain coverage. A source that rate-limits or fails is not repeatedly hit in the same batch.
@@ -85,13 +85,7 @@ Multi-Agent behavior is defined by role objectives, capability permissions, inpu
 
 ## From MVP to research platform
 
-```mermaid
-flowchart LR
-    V1["v0.1<br/>Research assistance"] --> V2["v0.2<br/>Full-text parsing / claim-level evidence"]
-    V2 --> V3["v0.3<br/>Experiment sandbox / LaTeX / figures and tables"]
-    V3 --> V4["v0.4<br/>Collaboration and expert approval"]
-    V4 --> V5["Research release<br/>workflow strategy evaluation and optimization"]
-```
+Version 0.2 adds the eight-area project workbench, six task types, configurable learning and delivery targets, contribution/figure decisions, feedback-driven revision, DOCX/TeX export, and a verifiable local delivery package. Page-level full-text parsing, claim-level evidence, experiment execution, final media rendering, collaboration, and expert approval remain later work.
 
 RL should not begin by training an LLM. After sufficient events, check outcomes, and user feedback exist, it could optimize workflow decisions such as when to search, what to read, which role to call, and when to request human confirmation.
 

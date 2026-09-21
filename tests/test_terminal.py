@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from scholaros.cli import _print_pending_search_plan, build_parser
+from scholaros.cli import _configuration_from_args, _print_pending_search_plan, build_parser
 from scholaros.domain import Paper, Project
 from scholaros.papers import PaperSearchService, paper_web_links
 from scholaros.terminal import TerminalUI, _create_project_wizard, _delete_project_wizard
@@ -118,6 +118,69 @@ def test_cli_accepts_search_plan_confirmation_command() -> None:
     args = build_parser().parse_args(["confirm-search", "0123456789ab"])
 
     assert args.command == "confirm-search"
+    assert args.project_id == "0123456789ab"
+
+
+def test_cli_run_accepts_v2_workspace_configuration() -> None:
+    args = build_parser().parse_args(
+        [
+            "run",
+            "验证命令行项目配置",
+            "--workflow",
+            "transfer",
+            "--scene",
+            "conference",
+            "--target-name",
+            "DemoConf",
+            "--language",
+            "en",
+            "--research-mode",
+            "materials_only",
+            "--delivery-scope",
+            "submission_package",
+            "--author-voice",
+            "strict",
+            "--same-field-papers",
+            "5",
+            "--target-venue-papers",
+            "7",
+            "--reference-count",
+            "30",
+            "--mechanism-figure",
+            "auto",
+            "--format",
+            "md",
+            "--format",
+            "tex",
+        ]
+    )
+
+    assert args.workflow == "transfer"
+    assert args.target_name == "DemoConf"
+    assert args.reference_count == 30
+    assert args.formats == ["md", "tex"]
+    configuration = _configuration_from_args(args)
+    assert configuration["reference_count_mode"] == "custom"
+    assert configuration["requested_scope"] == "submission_package"
+
+
+@pytest.mark.parametrize(
+    ("flag", "value"),
+    [
+        ("--same-field-papers", "0"),
+        ("--target-venue-papers", "51"),
+        ("--reference-count", "0"),
+    ],
+)
+def test_cli_rejects_out_of_range_workspace_counts(flag, value) -> None:
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["run", "验证命令行数量边界", flag, value])
+
+
+def test_cli_parser_supports_delivery() -> None:
+    args = build_parser().parse_args(["delivery", "0123456789ab"])
+
+    assert args.command == "delivery"
     assert args.project_id == "0123456789ab"
 
 

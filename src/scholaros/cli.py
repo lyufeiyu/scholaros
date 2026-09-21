@@ -15,6 +15,16 @@ from scholaros.papers import (
 )
 from scholaros.terminal import WorkflowReporter, interactive, serve
 from scholaros.workflow import ResearchWorkflow
+from scholaros.workspace import (
+    AUTHOR_VOICE_MODES,
+    DELIVERY_FORMATS,
+    MECHANISM_FIGURE_MODES,
+    OUTPUT_LANGUAGES,
+    REQUESTED_SCOPES,
+    RESEARCH_MODES,
+    SCENES,
+    WORKFLOWS,
+)
 
 
 def _search_limit(value: str) -> int:
@@ -27,6 +37,21 @@ def _search_limit(value: str) -> int:
     return limit
 
 
+def _bounded_int(label: str, minimum: int, maximum: int):
+    def parse(value: str) -> int:
+        try:
+            number = int(value)
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(f"{label} 必须是整数") from exc
+        if not minimum <= number <= maximum:
+            raise argparse.ArgumentTypeError(
+                f"{label} 必须在 {minimum} 到 {maximum} 之间"
+            )
+        return number
+
+    return parse
+
+
 def _print_pending_search_plan(project: Project, ui) -> None:
     ui.warning("检索计划正在等待确认，尚未向第三方论文源发送。")
     for warning in project.state.get("search_plan_warnings", []):
@@ -35,6 +60,56 @@ def _print_pending_search_plan(project: Project, ui) -> None:
         print(f"  {index}. {query}")
     print(f"确认后继续：scholaros confirm-search {project.id}")
     print(f"拒绝并修改：scholaros reject-search {project.id} --idea '新的研究说明'")
+
+
+def _add_configuration_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--workflow", choices=sorted(WORKFLOWS))
+    parser.add_argument("--scene", choices=sorted(SCENES))
+    parser.add_argument("--target-name", help="目标期刊、会议、报告或竞赛名称")
+    parser.add_argument("--language", dest="output_language", choices=sorted(OUTPUT_LANGUAGES))
+    parser.add_argument("--research-mode", choices=sorted(RESEARCH_MODES))
+    parser.add_argument("--delivery-scope", dest="requested_scope", choices=sorted(REQUESTED_SCOPES))
+    parser.add_argument("--author-voice", choices=sorted(AUTHOR_VOICE_MODES))
+    parser.add_argument("--same-field-papers", type=_bounded_int("同方向论文数", 1, 50))
+    parser.add_argument("--target-venue-papers", type=_bounded_int("目标场景论文数", 1, 50))
+    parser.add_argument(
+        "--reference-count",
+        type=_bounded_int("参考文献数量", 1, 500),
+        help="自定义参考文献目标数量；提供后自动启用 custom 模式",
+    )
+    parser.add_argument("--mechanism-figure", choices=sorted(MECHANISM_FIGURE_MODES))
+    parser.add_argument(
+        "--format",
+        action="append",
+        dest="formats",
+        choices=sorted(DELIVERY_FORMATS),
+        help="期望交付格式，可重复提供",
+    )
+
+
+def _configuration_from_args(args: argparse.Namespace) -> dict[str, object]:
+    fields = (
+        "workflow",
+        "scene",
+        "target_name",
+        "output_language",
+        "research_mode",
+        "requested_scope",
+        "author_voice",
+        "same_field_papers",
+        "target_venue_papers",
+        "mechanism_figure",
+        "formats",
+    )
+    configuration = {
+        field: value
+        for field in fields
+        if (value := getattr(args, field, None)) is not None
+    }
+    if args.reference_count is not None:
+        configuration["reference_count_mode"] = "custom"
+        configuration["reference_count"] = args.reference_count
+    return configuration
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -51,6 +126,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--offline", action="store_true", help="不联网检索，生成结构化演示稿")
     run.add_argument("--json", action="store_true", help="以 JSON 输出结果")
     run.add_argument("--guided", action="store_true", help="在范围、证据、方法和初稿完成后等待确认")
+    _add_configuration_arguments(run)
 
     for command, help_text in (("resume", "从当前断点继续"), ("approve", "确认引导阶段并继续"),
                                ("history", "列出重做前保存的历史版本")):
@@ -85,6 +161,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     show = subparsers.add_parser("show", help="查看项目状态")
     show.add_argument("project_id")
+
+    delivery = subparsers.add_parser("delivery", help="生成可编辑稿件、校验清单与本地交付包")
+    delivery.add_argument("project_id")
 
     confirm = subparsers.add_parser("confirm-search", help="确认待外发检索计划并继续项目")
     confirm.add_argument("project_id")
@@ -123,7 +202,12 @@ def main() -> None:
             workflow.search = PaperSearchService([])
             workflow.writer = ResearchWriter()
             workflow.allow_empty_search = True
-        project = workflow.create_project(args.idea, args.sources, guided=args.guided)
+        project = workflow.create_project(
+            args.idea,
+            args.sources,
+            guided=args.guided,
+            configuration=_configuration_from_args(args),
+        )
         for document in args.document:
             workflow.add_document(project.id, document)
         for results in args.results:
@@ -274,6 +358,12 @@ def main() -> None:
         value = project.to_dict()
         value["artifacts"] = workflow.store.list_artifacts(args.project_id)
         print(json.dumps(value, ensure_ascii=False, indent=2))
+    elif args.command == "delivery":
+        try:
+            result = workflow.prepare_delivery(args.project_id)
+        except (KeyError, ValueError, RuntimeError) as exc:
+            raise SystemExit(str(exc)) from exc
+        print(json.dumps(result.state["delivery_manifest"], ensure_ascii=False, indent=2))
     elif args.command == "confirm-search":
         try:
             result = asyncio.run(workflow.confirm_search_plan_and_run(args.project_id))

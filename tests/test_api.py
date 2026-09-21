@@ -44,6 +44,14 @@ def test_restricted_ieee_source_is_rejected_from_web_workflow(settings) -> None:
     assert response.status_code == 422
     assert "仅支持独立检索" in response.json()["detail"]
 
+    with TestClient(create_app(workflow)) as client:
+        metadata_response = client.post(
+            "/api/projects",
+            json={"idea": "验证 IEEE 元数据回退不会进入自动写作", "sources": ["ieee_metadata"]},
+        )
+    assert metadata_response.status_code == 422
+    assert "仅支持独立检索" in metadata_response.json()["detail"]
+
 
 def test_web_assets_and_document_upload(settings) -> None:
     workflow = ResearchWorkflow(settings, search=PaperSearchService([]))
@@ -60,14 +68,24 @@ def test_web_assets_and_document_upload(settings) -> None:
         assert 'id="authorAffiliation"' in home.text
         assert 'id="authorTopic"' in home.text
         assert 'id="authorVenue"' in home.text
-        assert "留下可核验的证据链" in home.text
-        assert "9 类" in home.text
+        assert 'data-venue="CVPR"' in home.text
+        assert 'data-venue="NeurIPS"' in home.text
+        assert "从问题收敛、跨源检索、证据账本到方法与草稿辅助" in home.text
+        assert "让研究过程" not in home.text
+        assert "跨源论文检索</h2>" not in home.text
+        assert "QUESTION → EVIDENCE → METHOD" in home.text
+        assert 'class="hero-stat-grid"' not in home.text
         assert client.get("/static/styles.css").status_code == 200
         script = client.get("/static/app.js")
         assert script.status_code == 200
         assert "async function createProject" in script.text
         assert "async function deleteCurrentProject" in script.text
         assert "async function confirmSearchPlan" in script.text
+        assert "requestSubmit" in script.text
+        assert "setSearchBusy" in script.text
+        assert 'role="status"' in home.text
+        assert "Semantic Scholar" in script.text
+        assert "IEEE 书目元数据" in script.text
         assert "async function rejectSearchPlan" in script.text
         assert "/confirm-search" in script.text
         assert "/reject-search" in script.text

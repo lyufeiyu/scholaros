@@ -64,6 +64,12 @@ ScholarOS only provides research assistance. Search results, evidence summaries,
 - IEEE's current [API Terms of Use](https://developer.ieee.org/API_Terms_of_Use2) place restrictions on AI/LLM and data-mining use of Content. To avoid sending IEEE metadata or abstracts to a model without authorization, the current `ieee` adapter is available only in `scholaros search` and the Web cross-source search, not the idea-to-draft workflow.
 - Add an explicit opt-in AI connector only after IEEE or the university library grants written permission for the specific research use. A university browser login alone is not sufficient.
 
+### IEEE bibliographic metadata via Crossref
+
+- The `ieee_metadata` source queries Crossref's `10.1109` DOI prefix, so IEEE papers remain discoverable even when an IEEE Xplore API key is not configured.
+- It returns bibliographic metadata and DOI/landing-page links only. It does not scrape IEEE Xplore, retrieve full text, or bypass IEEE access controls.
+- It is intentionally search-only and is not eligible for the idea-to-draft workflow; configure `SCHOLAROS_CONTACT_EMAIL` for responsible Crossref use.
+
 ### Google Scholar
 
 - Google Scholar overlaps substantially with the current sources but is not identical. Its [official description](https://scholar.google.com/intl/engb/scholar/about.html) also includes theses, books, abstracts, repositories, and other scholarly Web pages.
@@ -83,6 +89,7 @@ Terminal, CLI, Web, and API responses report each failed source and place a sugg
 | DBLP | 429, 503, timeout | Respect `Retry-After` and reduce frequency; 503 is temporary server unavailability, so retry later or disable DBLP temporarily. |
 | ACM | Crossref 429/403/5xx | The ACM adapter currently uses Crossref; set `SCHOLAROS_CONTACT_EMAIL`, follow Crossref guidance, or disable ACM temporarily. |
 | IEEE | Missing key, 401/403, 429, 5xx | Set `IEEE_XPLORE_API_KEY`; wait if the activation email still says `waiting`; wait for quota recovery on 429; retry 5xx later. |
+| IEEE metadata | Crossref 429/403/5xx | Set `SCHOLAROS_CONTACT_EMAIL`, follow Crossref guidance, and retry later; the adapter only provides IEEE bibliographic metadata. |
 
 Semantic Scholar documents that anonymous requests share public capacity and may be further limited during load; an API key provides dedicated capacity. See the [official API page](https://www.semanticscholar.org/product/api). Crossref recommends `mailto`, caching, and backoff after 429 in its [access and rate-limit guide](https://www.crossref.org/documentation/retrieve-metadata/rest-api/access-and-authentication/). DBLP documents protective online-API limits and recommends slower requests or datasets for bulk use in its [official FAQ](https://dblp.org/faq/1474706.html).
 

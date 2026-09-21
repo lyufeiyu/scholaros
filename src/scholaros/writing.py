@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
@@ -19,16 +20,22 @@ class ResearchWriter:
         self.event_sink = event_sink
 
     async def scope(
-        self, idea: str, documents: Sequence[dict[str, Any]] = ()
+        self,
+        idea: str,
+        documents: Sequence[dict[str, Any]] = (),
+        configuration: dict[str, Any] | None = None,
     ) -> ResearchSpec:
         fallback = self._fallback_spec(idea)
         if self.model is None:
             return fallback
         source_excerpts = _source_document_excerpts(documents)
         source_context = _source_document_context(documents)
+        configuration_context = json.dumps(configuration or {}, ensure_ascii=False)
         prompt = f"""
 你是 ScholarOS 的研究规划 Agent。把下列想法收敛为可检验、可写作的研究规格。
 想法：{idea}
+
+用户确认的工作配置：{configuration_context}
 
 用户上传的参考资料摘录：
 {source_context or '无上传参考资料。'}
@@ -116,6 +123,68 @@ selection），后续短语可以是资料或用户明确提出的互补方法�
             return keywords
         except Exception as exc:
             raise RuntimeError(f"无法生成英文检索词：{exc}") from exc
+
+    async def discover_papers(
+        self, query: str, venue_sources: Sequence[str] = ()
+    ) -> list[Paper]:
+        """固定论文源无结果时，请模型补充发现高置信度的真实论文。"""
+
+        if self.model is None:
+            return []
+        venues = "、".join(venue_sources) or "不限"
+        prompt = f"""
+你是 ScholarOS 的论文发现 Agent。固定论文数据库没有找到结果，请补充查找用户指定的真实论文。
+如果你的模型具备联网/搜索能力，请先搜索；如果不能联网，只返回你能高置信度确认真实存在的论文，不能猜测。
+用户检索内容：{query}
+允许的 AI 顶会范围：{venues}
+
+只输出 JSON 对象，格式为：{{"papers": [{{"title": "", "authors": [""], "year": 2025,
+"venue": "", "doi": "", "landing_url": "", "abstract": ""}}]}}。
+最多返回 5 条；没有高置信度结果就返回空数组。不要编造 DOI、网址、作者或摘要；未知字段填空字符串。
+""".strip()
+        try:
+            parsed = _parse_json_object(await self._ask("论文发现 Agent", prompt))
+            raw_papers = parsed.get("papers", [])
+            if not isinstance(raw_papers, list):
+                return []
+            discovered: list[Paper] = []
+            for index, item in enumerate(raw_papers[:5]):
+                if not isinstance(item, dict):
+                    continue
+                title = _required_string(item.get("title"), "title", max_chars=500)
+                authors = item.get("authors", [])
+                if not isinstance(authors, list):
+                    authors = []
+                clean_authors = [
+                    _required_string(author, "author", max_chars=160)
+                    for author in authors[:12]
+                    if isinstance(author, str) and author.strip()
+                ]
+                year = item.get("year")
+                year = year if isinstance(year, int) and 1900 <= year <= 2100 else None
+                doi = _optional_string(item.get("doi"), "doi") or None
+                landing_url = _optional_string(item.get("landing_url"), "landing_url") or None
+                if landing_url and not re.match(r"^https?://", landing_url, re.I):
+                    landing_url = None
+                abstract = _optional_string(item.get("abstract"), "abstract",)[:2000]
+                venue = _optional_string(item.get("venue"), "venue") or None
+                external_id = "llm:" + hashlib.sha256(title.casefold().encode()).hexdigest()[:16]
+                discovered.append(
+                    Paper(
+                        title=title,
+                        authors=clean_authors,
+                        year=year,
+                        abstract=abstract,
+                        sources=["llm_discovery"],
+                        external_id=external_id,
+                        doi=doi,
+                        venue=venue,
+                        landing_url=landing_url,
+                    )
+                )
+            return discovered
+        except Exception:
+            return []
 
     async def synthesize(
         self, spec: ResearchSpec, papers: Sequence[Paper], documents: Sequence[dict[str, Any]]
@@ -207,12 +276,36 @@ hypotheses、independent_variables、dependent_variables、baselines 必须是�
         evidence: Sequence[Evidence],
         design: dict[str, Any],
         documents: Sequence[dict[str, Any]],
+        configuration: dict[str, Any] | None = None,
     ) -> str:
         if self.model is None:
             return self._offline_paper(spec, papers, evidence, design)
         context = _evidence_context(evidence, documents)
         references = _references(papers, evidence)
         has_results = any(item.get("role") == "results" for item in documents)
+        config = configuration or {}
+        language = {
+            "zh": "中文",
+            "en": "英文",
+            "multilingual": "中文与英文双语",
+            "other": "用户指定语言（若未说明则使用研究问题的主要语言）",
+        }.get(str(config.get("output_language")), "中文")
+        workflow_instruction = {
+            "build_from_materials": "根据材料形成完整、可审阅的新稿。",
+            "rewrite_existing": "保留原稿中有证据支持的事实与结果，重构论证和表达；不得把改写变成无关新稿。",
+            "revise": "结合已有稿件与明确意见返修，保留未受影响的有效内容。",
+            "transfer": "保持科学内容不变，按目标场景调整结构、篇幅和表达；未知格式要求保持中性。",
+        }.get(str(config.get("workflow")), "根据材料形成完整、可审阅的新稿。")
+        target_instruction = (
+            f"目标场景为 {config.get('scene')}，目标名称为 {config.get('target_name')}。"
+            if config.get("target_name")
+            else f"目标场景为 {config.get('scene', 'journal')}，具体目标未确定，保持格式中性。"
+        )
+        voice_instruction = {
+            "strict": "严格保留原稿中可辨识且不损害准确性的作者表达。",
+            "standard": "适度保留作者术语、论证节奏和表达偏好。",
+            "off": "不特别模仿作者表达，以清晰、准确和一致为先。",
+        }.get(str(config.get("author_voice")), "适度保留作者表达。")
         result_instruction = (
             "用户已提供 results 角色资料。加入完整的结果与讨论章节；所有数值和结果性结论"
             "只能来自这些资料，缺失项明确写待补，不能推算或发明。"
@@ -221,7 +314,12 @@ hypotheses、independent_variables、dependent_variables、baselines 必须是�
             "性能提升或显著性，用完整的结果报告协议代替虚构结果。"
         )
         prompt = f"""
-你是 ScholarOS 的研究写作辅助 Agent。请用中文输出一篇供研究者审阅的 Markdown 研究草稿。
+你是 ScholarOS 的研究写作辅助 Agent。请用{language}输出一篇供研究者审阅的 Markdown 研究草稿。
+
+工作方式：{workflow_instruction}
+目标约束：{target_instruction}
+作者表达：{voice_instruction}
+研究分析边界：{config.get('research_mode', 'agent_decide')}。
 
 研究规格：
 {json.dumps(spec.to_dict(), ensure_ascii=False)}
@@ -250,14 +348,20 @@ hypotheses、independent_variables、dependent_variables、baselines 必须是�
         text = await self._ask("研究写作辅助 Agent", prompt)
         return _strip_markdown_fence(text)
 
-    async def revise(self, paper: str, findings: Sequence[dict[str, str]]) -> str:
-        if self.model is None or not findings:
+    async def revise(
+        self,
+        paper: str,
+        findings: Sequence[dict[str, str]],
+        feedback: Sequence[dict[str, Any]] = (),
+    ) -> str:
+        if self.model is None or (not findings and not feedback):
             return paper
         prompt = f"""
 你是 ScholarOS 的修订辅助 Agent。根据质量检查意见修订 Markdown 研究草稿。
 必须保留合法引用键与参考文献，不得新增事实、引用或实验结果；只输出完整修订稿。
 
 质量检查意见：{json.dumps(list(findings), ensure_ascii=False)}
+用户返修意见：{json.dumps(list(feedback), ensure_ascii=False)}
 
 论文：
 {paper}

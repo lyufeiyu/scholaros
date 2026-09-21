@@ -23,12 +23,20 @@ logger = logging.getLogger(__name__)
 GENERATED_ARTIFACTS = frozenset(
     {
         "papers.json",
+        "learning-plan.json",
+        "contribution-options.json",
         "evidence.json",
         "research-design.json",
+        "figure-story.json",
         "paper-draft.md",
         "review.json",
         "paper.md",
         "final-review.json",
+        "paper.docx",
+        "paper.tex",
+        "paper.pdf",
+        "delivery-manifest.json",
+        "delivery-package.zip",
     }
 )
 

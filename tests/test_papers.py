@@ -14,6 +14,7 @@ from scholaros.papers import (
     ArxivSource,
     CrossrefSource,
     DblpSource,
+    IeeeMetadataSource,
     IeeeSource,
     JsonHttpSource,
     MemorySource,
@@ -1604,6 +1605,10 @@ async def test_ieee_field_parameters_and_key_status(settings, monkeypatch) -> No
     missing_catalog = PaperSearchService.default(settings).catalog()
     missing_ieee = next(item for item in missing_catalog if item["name"] == "ieee")
     assert "未配置" in missing_ieee["status"]
+    ieee_metadata = next(item for item in missing_catalog if item["name"] == "ieee_metadata")
+    assert ieee_metadata["available"] is True
+    assert ieee_metadata["workflow_eligible"] is False
+    assert "Crossref" in ieee_metadata["access"]
     skipped = await PaperSearchService.default(settings).search(
         "agents", selected=["ieee"]
     )
@@ -1624,6 +1629,51 @@ async def test_ieee_field_parameters_and_key_status(settings, monkeypatch) -> No
     configured_ieee = PaperSearchService([source]).catalog()[0]
     assert "已配置" in configured_ieee["status"]
     assert "首次检索" in configured_ieee["status"]
+
+
+@pytest.mark.asyncio
+async def test_ieee_metadata_source_limits_crossref_to_ieee_dois(settings, monkeypatch) -> None:
+    source = IeeeMetadataSource(settings)
+    captured = {}
+
+    async def fake_get_json(url, params, headers=None):
+        captured.update({"url": url, "params": params, "headers": headers})
+        return {
+            "message": {
+                "items": [
+                    {
+                        "DOI": "10.1109/CVPR.2024.00001",
+                        "title": ["A vision paper"],
+                        "author": [{"given": "Ada", "family": "Lovelace"}],
+                        "container-title": ["2024 IEEE/CVF Conference on Computer Vision and Pattern Recognition"],
+                        "published": {"date-parts": [[2024]]},
+                        "URL": "https://doi.org/10.1109/CVPR.2024.00001",
+                    }
+                ]
+            }
+        }
+
+    monkeypatch.setattr(source, "get_json", fake_get_json)
+    papers = await source.search("CVPR", 5, SearchField.VENUE)
+
+    assert captured["params"]["filter"] == "prefix:10.1109"
+    assert papers[0].sources == ["ieee_metadata"]
+    assert papers[0].doi == "10.1109/CVPR.2024.00001"
+
+
+@pytest.mark.asyncio
+async def test_ieee_metadata_source_rejects_non_ieee_doi_without_request(settings, monkeypatch) -> None:
+    source = IeeeMetadataSource(settings)
+    called = False
+
+    async def fail_get_json(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("非 IEEE DOI 不应访问 Crossref")
+
+    monkeypatch.setattr(source, "get_json", fail_get_json)
+    assert await source.search("10.1000/example", 5, SearchField.DOI) == []
+    assert called is False
 
 
 @pytest.mark.asyncio

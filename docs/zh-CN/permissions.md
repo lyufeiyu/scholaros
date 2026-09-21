@@ -64,6 +64,12 @@ ScholarOS 只提供科研辅助。检索结果、证据摘要、方法建议和�
 - IEEE 当前 [API Terms of Use](https://developer.ieee.org/API_Terms_of_Use2) 对把 Content 用于 AI/LLM 和数据挖掘设有限制。为避免未经授权把 IEEE 元数据或摘要发送给模型，当前 `ieee` 只能用于 `scholaros search` 或网页“跨源论文检索”，不能加入 Idea→论文工作流。
 - 若 IEEE 或学校图书馆为你的具体研究出具书面许可，再增加显式 opt-in 的 AI connector；不要仅凭学校网页登录推定已经获得该许可。
 
+### 经 Crossref 获取 IEEE 书目元数据
+
+- `ieee_metadata` source 查询 Crossref 的 `10.1109` DOI 前缀，因此即使未配置 IEEE Xplore API key，也能检索 IEEE 论文题录。
+- 该来源只返回书目元数据以及 DOI/落地页链接，不抓取 IEEE Xplore 网页、不自动读取全文，也不绕过 IEEE 访问控制。
+- 它有意只用于独立检索，不能进入 Idea→论文工作流；生产使用请配置 `SCHOLAROS_CONTACT_EMAIL` 并遵守 Crossref 使用规范。
+
 ### Google Scholar
 
 - Google Scholar 的覆盖范围与 ScholarOS 当前来源高度重叠，但不相等；其[官方介绍](https://scholar.google.com/intl/engb/scholar/about.html)还列出学位论文、图书、摘要、机构仓储和其他学术网页。
@@ -83,6 +89,7 @@ ScholarOS 只提供科研辅助。检索结果、证据摘要、方法建议和�
 | DBLP | 429、503、超时 | 尊重 `Retry-After` 并降低频率；503 是 DBLP 服务端临时不可用，稍后重试或暂时取消 DBLP。 |
 | ACM | Crossref 的 429/403/5xx | 当前 ACM source 实际经 Crossref 查询；设置 `SCHOLAROS_CONTACT_EMAIL`，按 Crossref 的方案处理，或暂时取消 ACM。 |
 | IEEE | 未配置、401/403、429、5xx | 未配置时设置 `IEEE_XPLORE_API_KEY`；邮件仍为 `waiting` 时等待激活；429 等配额恢复；5xx 稍后重试。 |
+| IEEE 元数据 | Crossref 的 429/403/5xx | 设置 `SCHOLAROS_CONTACT_EMAIL`，按 Crossref 方案处理并稍后重试；该适配器只提供 IEEE 书目元数据。 |
 
 Semantic Scholar 官方说明匿名请求共享公共限额，繁忙时可能进一步限流；带 Key 可获得独立额度。[官方 API 说明](https://www.semanticscholar.org/product/api)。Crossref 官方建议提供 `mailto`、缓存响应并在 429 后退避，[访问与限流说明](https://www.crossref.org/documentation/retrieve-metadata/rest-api/access-and-authentication/)。DBLP 官方说明在线 API 有保护性限流，大量查询应降低频率或改用数据集，[官方 FAQ](https://dblp.org/faq/1474706.html)。
 

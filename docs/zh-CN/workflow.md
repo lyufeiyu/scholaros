@@ -47,7 +47,7 @@
 
 ## API 与兼容性
 
-`POST /api/projects` 新增 `guided: true`；不传时保持原行为。操作接口为 `POST /api/projects/{id}/resume`、`/approve`、`/rerun?stage=designing`。历史接口为 `GET /api/projects/{id}/history` 和 `/history/{revision}/{name}`。原来的 `/run?restart=true` 保留，现在会先保存旧版本。
+`POST /api/projects` 支持 `guided: true` 和可选的 `configuration` 对象；不传时保持原行为。配置更新使用 `PUT /api/projects/{id}/configuration`，贡献与图件选择使用 `POST /api/projects/{id}/decisions`，返修意见使用 `/feedback`，可编辑导出与可核验本地稿包使用 `/delivery`。项目操作仍为 `POST /api/projects/{id}/resume`、`/approve`、`/rerun?stage=designing`。历史接口为 `GET /api/projects/{id}/history` 和 `/history/{revision}/{name}`。原来的 `/run?restart=true` 保留，现在会先保存旧版本。用户侧模型见[项目工作台与交付](workbench.md)。
 
 新字段存放在现有项目 JSON 中，不需要数据库迁移。缺少这些字段的旧项目仍按自动流程处理。新建的显式离线项目在重新打开、继续和重做时保持离线，包括从 Web API 操作。较早的离线项目未记录这一标记，不能自动推断，请重新创建离线演示项目。
 

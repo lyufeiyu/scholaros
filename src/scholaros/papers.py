@@ -634,6 +634,56 @@ class AcmMetadataSource(CrossrefSource):
         return self._parse_items(body)
 
 
+class IeeeMetadataSource(CrossrefSource):
+    """通过 Crossref 检索 IEEE 书目元数据；不绕过 IEEE Xplore 内容权限。"""
+
+    name = "ieee_metadata"
+    doi_prefix = "10.1109"
+
+    async def search(
+        self, query: str, limit: int, field: SearchField = SearchField.ALL
+    ) -> list[Paper]:
+        if field == SearchField.DOI:
+            doi = _normalize_search_value(query, field)
+            if not doi.lower().startswith(f"{self.doi_prefix.lower()}/"):
+                return []
+            return await self._search_doi(doi)
+        params = self._params(query, limit, field)
+        current_filter = params.get("filter")
+        params["filter"] = (
+            f"{current_filter},prefix:{self.doi_prefix}"
+            if current_filter
+            else f"prefix:{self.doi_prefix}"
+        )
+        body = await self.get_json("https://api.crossref.org/v1/works", params)
+        return self._parse_items(body)
+
+    async def search_author(
+        self,
+        query: str,
+        limit: int,
+        *,
+        affiliation: str | None,
+        topic: str | None,
+        venue: str | None,
+    ) -> list[Paper]:
+        params = self._author_filter_params(
+            query,
+            limit,
+            affiliation=affiliation,
+            topic=topic,
+            venue=venue,
+        )
+        current_filter = params.get("filter")
+        params["filter"] = (
+            f"{current_filter},prefix:{self.doi_prefix}"
+            if current_filter
+            else f"prefix:{self.doi_prefix}"
+        )
+        body = await self.get_json("https://api.crossref.org/v1/works", params)
+        return self._parse_items(body)
+
+
 class SemanticScholarSource(JsonHttpSource):
     name = "semantic_scholar"
 
@@ -1031,7 +1081,7 @@ async def _search_source_with_author_filters(
 
 
 class PaperSearchService:
-    workflow_blocked_sources = frozenset({"ieee"})
+    workflow_blocked_sources = frozenset({"ieee", "ieee_metadata"})
 
     def __init__(self, sources: Iterable[PaperSource]):
         self.sources = {source.name: source for source in sources}
@@ -1047,6 +1097,7 @@ class PaperSearchService:
                 SemanticScholarSource(settings),
                 DblpSource(settings),
                 IeeeSource(settings),
+                IeeeMetadataSource(settings),
             ]
         )
 
@@ -1069,6 +1120,8 @@ class PaperSearchService:
                 "access": (
                     "ACM 元数据（经 Crossref）"
                     if source.name == "acm"
+                    else "IEEE 书目元数据（经 Crossref）"
+                    if source.name == "ieee_metadata"
                     else "IEEE 官方 API"
                     if source.name == "ieee"
                     else "开放元数据 API"
@@ -1091,6 +1144,7 @@ class PaperSearchService:
         author_affiliation: str | None = None,
         author_topic: str | None = None,
         author_venue: str | None = None,
+        venue_sources: Sequence[str] | None = None,
     ) -> SearchResult:
         if not 1 <= limit <= 100:
             raise ValueError("limit 必须在 1 到 100 之间")
@@ -1109,6 +1163,11 @@ class PaperSearchService:
         }
         if search_field != SearchField.AUTHOR and any(author_filters.values()):
             raise ValueError("学校/机构、主题和会议附加条件仅能用于作者检索")
+        selected_venues = {
+            _venue_identity(value) or _normalize_search_value(value, SearchField.VENUE)
+            for value in (venue_sources or [])
+            if value and value.strip()
+        }
         names = list(selected) if selected is not None else list(self.sources)
         chosen = [self.sources[name] for name in names if name in self.sources]
         unknown = [name for name in names if name not in self.sources]
@@ -1184,6 +1243,7 @@ class PaperSearchService:
             paper
             for paper in papers
             if _paper_matches_query(query, paper, search_field)
+            and _paper_matches_venue_sources(paper, selected_venues)
             and _paper_matches_author_filters(
                 query,
                 paper,
@@ -1296,6 +1356,7 @@ class PaperSearchService:
         query_tokens = _significant_tokens(query)
         deduplicated: dict[str, Paper] = {}
         for paper in papers:
+            paper.authors = _clean_author_names(paper.authors)
             key = _paper_dedup_key(paper)
             if key is None:
                 continue
@@ -1340,6 +1401,10 @@ def _paper_dedup_key(paper: Paper) -> str | None:
 
 def _merge_paper(current: Paper, paper: Paper) -> None:
     current.sources = sorted(set(current.sources + paper.sources))
+    current.authors = _clean_author_names(current.authors)
+    incoming_authors = _clean_author_names(paper.authors)
+    if not current.authors and incoming_authors:
+        current.authors = incoming_authors
     current.abstract = max((current.abstract, paper.abstract), key=len)
     current.pdf_url = current.pdf_url or paper.pdf_url
     current.landing_url = current.landing_url or paper.landing_url
@@ -1510,6 +1575,10 @@ def _rate_limit_suggestion(source: str, retry_after_seconds: int | None) -> str:
             "ACM 当前经 Crossref 检索；在项目 .env 设置 SCHOLAROS_CONTACT_EMAIL，"
             "重启后再试，或暂时取消 ACM。"
         ),
+        "ieee_metadata": (
+            "IEEE 书目元数据当前经 Crossref 检索；在项目 .env 设置 SCHOLAROS_CONTACT_EMAIL，"
+            "重启后再试，或暂时取消该来源。"
+        ),
         "dblp": "稍后重试并降低检索频率；频繁出现时暂时取消 DBLP。",
         "openalex": (
             "在项目 .env 设置 SCHOLAROS_CONTACT_EMAIL，重启后降低检索频率；"
@@ -1537,8 +1606,14 @@ def _authorization_suggestion(source: str) -> str:
             "尚未配置时先申请 SEMANTIC_SCHOLAR_API_KEY；已配置时检查是否完整有效，"
             "修正项目 .env 后重启 ScholarOS。"
         )
-    if source in {"crossref", "acm"}:
-        prefix = "ACM 当前经 Crossref 检索；" if source == "acm" else ""
+    if source in {"crossref", "acm", "ieee_metadata"}:
+        prefix = (
+            "ACM 当前经 Crossref 检索；"
+            if source == "acm"
+            else "IEEE 书目元数据当前经 Crossref 检索；"
+            if source == "ieee_metadata"
+            else ""
+        )
         return (
             f"{prefix}检查 SCHOLAROS_CONTACT_EMAIL，并按 Crossref 返回信息联系支持；"
             "不要反复请求。"
@@ -1562,10 +1637,11 @@ def _service_unavailable_suggestion(source: str) -> str:
             "这是 DBLP 服务端临时故障；稍后重试，或暂时取消 DBLP，"
             "继续使用 OpenAlex、Crossref、arXiv 等来源。"
         )
-    if source == "acm":
+    if source in {"acm", "ieee_metadata"}:
+        source_label = "ACM" if source == "acm" else "IEEE 书目元数据"
         return (
-            "ACM 当前经 Crossref 检索，实际是 Crossref 上游暂时故障；"
-            "稍后重试，或暂时取消 ACM。"
+            f"{source_label} 当前经 Crossref 检索，实际是 Crossref 上游暂时故障；"
+            f"稍后重试，或暂时取消 {source_label}。"
         )
     if source == "crossref":
         return "Crossref 上游暂时故障；稍后重试，或先使用其他来源。"
@@ -1575,10 +1651,11 @@ def _service_unavailable_suggestion(source: str) -> str:
 
 
 def _network_suggestion(source: str) -> str:
-    if source == "acm":
+    if source in {"acm", "ieee_metadata"}:
+        source_label = "ACM" if source == "acm" else "IEEE 书目元数据"
         return (
-            "ACM 当前经 Crossref 检索；检查网络/代理能否访问 api.crossref.org，"
-            "或暂时取消 ACM。"
+            f"{source_label} 当前经 Crossref 检索；检查网络/代理能否访问 api.crossref.org，"
+            f"或暂时取消 {source_label}。"
         )
     return f"检查网络、代理和系统时间能否正常访问 {source}，然后重试或暂时取消该来源。"
 
@@ -1802,6 +1879,20 @@ def _paper_matches_query(query: str, paper: Paper, field: SearchField) -> bool:
     if field == SearchField.VENUE:
         return _venue_matches_query(query, paper.venue or "")
     return _topic_matches(query, paper)
+
+
+def _paper_matches_venue_sources(paper: Paper, selected_venues: set[str]) -> bool:
+    if not selected_venues:
+        return True
+    raw_venue = (paper.venue or "").strip()
+    if not raw_venue:
+        # 部分来源只返回题录，不返回会议字段；不能因此把命中的论文误删。
+        return True
+    paper_identity = _venue_identity(raw_venue)
+    if not paper_identity:
+        # 未识别的会议写法也保留，避免 IEEE/CVF 等变体造成误过滤。
+        return True
+    return paper_identity in selected_venues
 
 
 def _paper_matches_author_filters(
@@ -2109,8 +2200,17 @@ def _inverted_abstract(value: dict[str, list[int]] | None) -> str:
 
 def _cite_key(paper: Paper) -> str:
     family = "Paper"
-    if paper.authors:
-        family = re.sub(r"[^A-Za-z0-9]", "", paper.authors[0].split()[-1]) or "Paper"
+    authors = _clean_author_names(paper.authors)
+    if authors:
+        family = re.sub(r"[^A-Za-z0-9]", "", authors[0].split()[-1]) or "Paper"
     identity = (paper.doi or _normalize_title(paper.title) or paper.external_id).lower()
     digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:6]
     return f"{family}{paper.year or 'nd'}{digest}"
+
+
+def _clean_author_names(authors: Sequence[str] | None) -> list[str]:
+    return [
+        author.strip()
+        for author in (authors or [])
+        if isinstance(author, str) and author.strip()
+    ]

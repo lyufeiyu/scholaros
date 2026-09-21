@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from scholaros.config import Settings
+from scholaros.delivery import prepare_delivery
 from scholaros.domain import (
     MAX_RESEARCH_IDEA_LENGTH,
     Event,
@@ -26,9 +27,30 @@ from scholaros.llm import OpenAICompatibleModel
 from scholaros.papers import PaperSearchService
 from scholaros.review import PaperReviewer
 from scholaros.storage import ProjectStore
+from scholaros.workspace import (
+    DESIGN_CONFIGURATION_FIELDS,
+    DRAFT_CONFIGURATION_FIELDS,
+    SCOPING_CONFIGURATION_FIELDS,
+    SEARCH_CONFIGURATION_FIELDS,
+    build_contribution_options,
+    build_figure_story,
+    build_learning_plan,
+    configuration_changes,
+    normalize_configuration,
+    record_decision,
+)
 from scholaros.writing import ResearchWriter
 
 ProgressSink = Callable[[str, dict[str, Any]], None]
+DELIVERY_OUTPUT_ARTIFACTS = frozenset(
+    {
+        "paper.docx",
+        "paper.tex",
+        "paper.pdf",
+        "delivery-manifest.json",
+        "delivery-package.zip",
+    }
+)
 
 
 class ResearchWorkflow:
@@ -42,20 +64,31 @@ class ResearchWorkflow:
         Stage.REVISING,
     ]
     stage_outputs = {
-        Stage.SCOPING: ("spec",),
+        Stage.SCOPING: ("spec", "learning_plan", "contribution_options"),
         Stage.SEARCHING: ("papers", "source_failures", "search_filtered_out", "search_queries",
+                          "search_skipped",
                           "search_plan_confirmed", "search_confirmation_required", "search_plan_warnings"),
         Stage.SYNTHESIZING: ("evidence",),
-        Stage.DESIGNING: ("design",),
+        Stage.DESIGNING: ("design", "figure_story"),
         Stage.DRAFTING: (),
         Stage.REVIEWING: ("review",),
         Stage.REVISING: ("final_review",),
     }
     stage_artifacts = {
-        Stage.SCOPING: (), Stage.SEARCHING: ("papers.json",),
-        Stage.SYNTHESIZING: ("evidence.json",), Stage.DESIGNING: ("research-design.json",),
+        Stage.SCOPING: ("learning-plan.json", "contribution-options.json"),
+        Stage.SEARCHING: ("papers.json",),
+        Stage.SYNTHESIZING: ("evidence.json",),
+        Stage.DESIGNING: ("research-design.json", "figure-story.json"),
         Stage.DRAFTING: ("paper-draft.md",), Stage.REVIEWING: ("review.json",),
-        Stage.REVISING: ("paper.md", "final-review.json"),
+        Stage.REVISING: (
+            "paper.md",
+            "final-review.json",
+            "paper.docx",
+            "paper.tex",
+            "paper.pdf",
+            "delivery-manifest.json",
+            "delivery-package.zip",
+        ),
     }
     guided_stages = {Stage.SCOPING, Stage.SYNTHESIZING, Stage.DESIGNING, Stage.DRAFTING}
 
@@ -82,7 +115,12 @@ class ResearchWorkflow:
         self.allow_empty_search = allow_empty_search
 
     def create_project(
-        self, idea: str, selected_sources: Sequence[str] | None = None, *, guided: bool = False
+        self,
+        idea: str,
+        selected_sources: Sequence[str] | None = None,
+        *,
+        guided: bool = False,
+        configuration: dict[str, Any] | None = None,
     ) -> Project:
         clean_idea = idea.strip()
         if len(clean_idea) < 8:
@@ -95,11 +133,174 @@ class ResearchWorkflow:
             id=uuid.uuid4().hex[:12],
             idea=clean_idea,
             selected_sources=sources,
-            state={"schema_version": 1, "guided": guided, "offline": self.allow_empty_search},
+            state={
+                "schema_version": 2,
+                "guided": guided,
+                "offline": self.allow_empty_search,
+                "configuration": normalize_configuration(configuration),
+                "decisions": [],
+                "feedback": [],
+            },
         )
         self.store.save_project(project)
         self._event(project, "project_created", {"idea": clean_idea})
         return project
+
+    def update_configuration(
+        self, project_id: str, configuration: dict[str, Any]
+    ) -> Project:
+        with self.store.project_lock(project_id):
+            project = self._require_project(project_id)
+            if project.status == ProjectStatus.RUNNING:
+                raise RuntimeError("项目运行中不能修改配置")
+            previous = normalize_configuration(project.state.get("configuration"))
+            current = normalize_configuration(configuration)
+            changed = configuration_changes(previous, current)
+            if not changed:
+                return project
+            if project.state.get("spec"):
+                self.store.snapshot_project(project, "修改项目配置")
+                if changed & SCOPING_CONFIGURATION_FIELDS:
+                    self._invalidate_from(project, Stage.SCOPING)
+                elif changed & SEARCH_CONFIGURATION_FIELDS:
+                    self._invalidate_from(project, Stage.SEARCHING)
+                elif changed & DESIGN_CONFIGURATION_FIELDS:
+                    self._invalidate_from(project, Stage.DESIGNING)
+                elif changed & DRAFT_CONFIGURATION_FIELDS:
+                    self._invalidate_from(project, Stage.DRAFTING)
+            project.state.pop("delivery_manifest", None)
+            self.store.clear_generated_artifacts(project.id, DELIVERY_OUTPUT_ARTIFACTS)
+            project.state["configuration"] = current
+            project.state["schema_version"] = 2
+            self.store.save_project(project)
+            self._event(project, "configuration_updated", {"changed_fields": sorted(changed)})
+            return project
+
+    def save_decision(
+        self,
+        project_id: str,
+        *,
+        decision_type: str,
+        item_id: str,
+        value: str,
+        comment: str = "",
+    ) -> Project:
+        with self.store.project_lock(project_id):
+            project = self._require_project(project_id)
+            if project.status == ProjectStatus.RUNNING:
+                raise RuntimeError("项目运行中不能保存选择")
+            decisions = record_decision(
+                project.state.get("decisions", []),
+                decision_type=decision_type,
+                item_id=item_id,
+                value=value,
+                comment=comment,
+            )
+            if decision_type == "contribution":
+                options = project.state.get("contribution_options", [])
+                selected = next((item for item in options if item.get("id") == item_id), None)
+                if selected is None:
+                    raise ValueError("贡献候选不存在，请先完成范围界定")
+                if value != "selected":
+                    raise ValueError("贡献候选只能标记为 selected")
+                spec = project.state.get("spec")
+                if isinstance(spec, dict):
+                    if project.state.get("evidence") or project.state.get("design"):
+                        self.store.snapshot_project(project, "修改贡献方向")
+                        self._invalidate_from(project, Stage.SYNTHESIZING)
+                    spec["contribution"] = selected["summary"]
+                    project.state["selected_contribution"] = item_id
+            elif decision_type == "figure":
+                story = project.state.get("figure_story", [])
+                figure = next((item for item in story if item.get("id") == item_id), None)
+                if figure is None:
+                    raise ValueError("图件候选不存在，请先完成方法设计")
+                if project.state.get("delivery_manifest") or any(
+                    self.store.artifact_path(project.id, name) is not None
+                    for name in DELIVERY_OUTPUT_ARTIFACTS
+                ):
+                    self.store.snapshot_project(project, "修改图件选择")
+                figure["decision"] = value
+                figure["comment"] = comment.strip()
+                project.state.pop("delivery_manifest", None)
+                self.store.clear_generated_artifacts(project.id, DELIVERY_OUTPUT_ARTIFACTS)
+                self.store.save_artifact(
+                    project.id,
+                    "figure-story.json",
+                    json.dumps(story, ensure_ascii=False, indent=2),
+                )
+            project.state["decisions"] = decisions
+            self.store.save_project(project)
+            self._event(
+                project,
+                "decision_saved",
+                {"decision_type": decision_type, "item_id": item_id, "value": value},
+            )
+            return project
+
+    def add_feedback(self, project_id: str, *, scope: str, text: str) -> Project:
+        clean_scope = scope.strip()
+        if clean_scope not in {"manuscript", "figures", "all"}:
+            raise ValueError("反馈范围只能是 manuscript、figures 或 all")
+        clean_text = text.strip()
+        if not 2 <= len(clean_text) <= 32_000:
+            raise ValueError("反馈内容必须为 2—32000 个字符")
+        with self.store.project_lock(project_id):
+            project = self._require_project(project_id)
+            if project.status == ProjectStatus.RUNNING:
+                raise RuntimeError("项目运行中不能提交返修意见")
+            if project.stage != Stage.COMPLETED or project.state.get(
+                "pending_clear_from"
+            ) or project.state.get("clear_generated_on_next_run"):
+                raise ValueError("项目存在待更新阶段，请先继续运行再提交返修意见")
+            paper_path = self.store.artifact_path(project.id, "paper.md")
+            if paper_path is None:
+                raise ValueError("当前没有可返修的完成稿")
+            self.store.snapshot_project(project, "提交返修意见")
+            # 返修应从当前完成稿继续，而不是回退到首次生成的初稿；旧版本已进入历史快照。
+            self.store.save_artifact(
+                project.id, "paper-draft.md", paper_path.read_text(encoding="utf-8")
+            )
+            project.state.setdefault("feedback", []).append(
+                {
+                    "id": uuid.uuid4().hex[:12],
+                    "scope": clean_scope,
+                    "text": clean_text,
+                    "status": "pending",
+                    "created_at": utc_now(),
+                }
+            )
+            self._invalidate_from(project, Stage.REVISING)
+            self.store.save_project(project)
+            self._event(project, "feedback_submitted", {"scope": clean_scope})
+            return project
+
+    def prepare_delivery(self, project_id: str) -> Project:
+        with self.store.project_lock(project_id):
+            project = self._require_project(project_id)
+            if project.status == ProjectStatus.RUNNING:
+                raise RuntimeError("项目运行中不能准备交付包")
+            if project.stage != Stage.COMPLETED or project.state.get(
+                "pending_clear_from"
+            ) or project.state.get("clear_generated_on_next_run"):
+                raise ValueError("项目存在待更新阶段，请先继续运行再准备交付包")
+            project.state["configuration"] = normalize_configuration(
+                project.state.get("configuration")
+            )
+            project.state["schema_version"] = 2
+            manifest = prepare_delivery(project, self.store)
+            project.state["delivery_manifest"] = manifest
+            self.store.save_project(project)
+            self._event(
+                project,
+                "delivery_prepared",
+                {
+                    "ready": manifest["ready"],
+                    "available_formats": manifest["available_formats"],
+                    "missing_formats": manifest["missing_formats"],
+                },
+            )
+            return project
 
     def add_document(
         self,
@@ -171,16 +372,19 @@ class ResearchWorkflow:
             )
         return existing
 
-    @staticmethod
     def _reset_after_source_change(
-        project: Project, documents: Sequence[dict[str, Any]]
+        self, project: Project, documents: Sequence[dict[str, Any]]
     ) -> None:
+        self.store.clear_generated_artifacts(project.id, DELIVERY_OUTPUT_ARTIFACTS)
         project.state = {
             "documents": list(documents),
             "clear_generated_on_next_run": True,
             "guided": project.state.get("guided", False),
             "offline": project.state.get("offline", False),
-            "schema_version": 1,
+            "schema_version": 2,
+            "configuration": normalize_configuration(project.state.get("configuration")),
+            "decisions": [],
+            "feedback": [],
         }
         project.title = None
         project.stage = Stage.SCOPING
@@ -242,6 +446,8 @@ class ResearchWorkflow:
             for key in self.stage_outputs[item]:
                 project.state.pop(key, None)
         project.state.pop("pending_checkpoint", None)
+        project.state.pop("delivery_manifest", None)
+        self.store.clear_generated_artifacts(project.id, DELIVERY_OUTPUT_ARTIFACTS)
         project.state["completed_stages"] = [
             value for value in project.state.get("completed_stages", []) if value not in invalid
         ]
@@ -252,8 +458,20 @@ class ResearchWorkflow:
         project.stage = stage
         project.status = ProjectStatus.CREATED
         project.error = None
+        if self.stage_order.index(stage) <= self.stage_order.index(Stage.DESIGNING):
+            project.state["decisions"] = [
+                item
+                for item in project.state.get("decisions", [])
+                if item.get("type") != "figure"
+            ]
         if stage == Stage.SCOPING:
             project.title = None
+            project.state.pop("selected_contribution", None)
+            project.state["decisions"] = [
+                item
+                for item in project.state.get("decisions", [])
+                if item.get("type") != "contribution"
+            ]
 
     async def rerun_from(self, project_id: str, stage: Stage | str) -> Project:
         with self.store.project_lock(project_id):
@@ -308,7 +526,10 @@ class ResearchWorkflow:
                 "clear_generated_on_next_run": True,
                 "guided": project.state.get("guided", False),
                 "offline": project.state.get("offline", False),
-                "schema_version": 1,
+                "schema_version": 2,
+                "configuration": normalize_configuration(project.state.get("configuration")),
+                "decisions": [],
+                "feedback": [],
             }
             project.stage = Stage.SCOPING
         project.status = ProjectStatus.RUNNING
@@ -396,13 +617,16 @@ class ResearchWorkflow:
             project.idea = clean_idea
         project.state = {
             "documents": documents, "guided": project.state.get("guided", False),
-            "offline": project.state.get("offline", False), "schema_version": 1,
+            "offline": project.state.get("offline", False), "schema_version": 2,
+            "configuration": normalize_configuration(project.state.get("configuration")),
+            "decisions": [], "feedback": [],
             "clear_generated_on_next_run": True,
         }
         project.title = None
         project.stage = Stage.SCOPING
         project.status = ProjectStatus.CREATED
         project.error = None
+        self.store.clear_generated_artifacts(project.id, DELIVERY_OUTPUT_ARTIFACTS)
         self.store.save_project(project)
         self._event(project, "search_plan_rejected", {"idea_revised": revised_idea is not None})
         return project
@@ -474,58 +698,107 @@ class ResearchWorkflow:
                 spec = await self._scope(project)
                 project.title = spec.title
                 project.state["spec"] = spec.to_dict()
+                configuration = normalize_configuration(project.state.get("configuration"))
+                project.state["configuration"] = configuration
+                project.state["learning_plan"] = build_learning_plan(configuration, spec)
+                project.state["contribution_options"] = build_contribution_options(spec)
+                project.state["selected_contribution"] = "primary"
+                self.store.save_artifact(
+                    project.id,
+                    "learning-plan.json",
+                    json.dumps(project.state["learning_plan"], ensure_ascii=False, indent=2),
+                )
+                self.store.save_artifact(
+                    project.id,
+                    "contribution-options.json",
+                    json.dumps(
+                        project.state["contribution_options"], ensure_ascii=False, indent=2
+                    ),
+                )
 
             elif stage == Stage.SEARCHING:
                 spec = project.state["spec"]
+                configuration = normalize_configuration(
+                    project.state.get("configuration")
+                )
                 queries = _workflow_search_queries(spec.get("keywords", []), project.idea)
-                project.state["search_queries"] = queries
-                has_source_documents = any(
-                    item.get("role", "source") == "source"
-                    for item in project.state.get("documents", [])
-                )
-                if (
-                    (has_source_documents or project.state.get("guided"))
-                    and not self.allow_empty_search
-                    and not project.state.get("search_plan_confirmed")
-                ):
-                    project.state["search_confirmation_required"] = True
-                    project.state["search_plan_warnings"] = _search_plan_warnings(
-                        queries, str(spec.get("source_basis") or "")
-                    )
-                    project.status = ProjectStatus.NEEDS_ATTENTION
-                    project.error = (
-                        "检索计划需要你确认；确认前不会向第三方论文源发送查询"
-                    )
+                venue_query = project.state.get("learning_plan", {}).get("venue_query")
+                if venue_query:
+                    queries = list(dict.fromkeys([*queries, venue_query]))
+                if configuration["research_mode"] == "materials_only":
+                    if not project.state.get("documents"):
+                        raise RuntimeError("只使用已有材料模式必须先上传至少一份资料或结果")
+                    project.state["search_queries"] = []
+                    project.state["search_skipped"] = "materials_only"
+                    project.state["papers"] = []
+                    project.state["source_failures"] = []
+                    project.state["search_filtered_out"] = 0
+                    self.store.save_artifact(project.id, "papers.json", "[]")
                     self.store.save_project(project)
-                    self._event(
-                        project,
-                        "search_plan_confirmation_required",
-                        {"title": project.title, "queries": queries},
+                else:
+                    project.state["search_queries"] = queries
+                    has_source_documents = any(
+                        item.get("role", "source") == "source"
+                        for item in project.state.get("documents", [])
                     )
-                    return
-                result = await self.search.search_many(
-                    queries,
-                    limit=24,
-                    selected=project.selected_sources or self.search.workflow_sources(),
-                )
-                project.state["papers"] = [paper.to_dict() for paper in result.papers]
-                project.state["source_failures"] = [item.to_dict() for item in result.failures]
-                project.state["search_filtered_out"] = result.filtered_out
-                self.store.save_artifact(
-                    project.id,
-                    "papers.json",
-                    json.dumps(project.state["papers"], ensure_ascii=False, indent=2),
-                )
-                if not result.papers and not self.allow_empty_search:
-                    failure_summary = "；".join(
-                        f"{item.source}: {item.reason}" for item in result.failures
-                    ) or "无来源错误"
-                    raise RuntimeError(
-                        "没有检索到与研究主题匹配的论文，已停止后续写作以避免领域漂移。"
-                        f"实际检索词：{'；'.join(queries)}；"
-                        f"严格相关性过滤排除了 {result.filtered_out} 条候选；"
-                        f"来源状态：{failure_summary}。请核对资料主题或调整检索词后重新运行"
+                    if (
+                        (has_source_documents or project.state.get("guided"))
+                        and not self.allow_empty_search
+                        and not project.state.get("search_plan_confirmed")
+                    ):
+                        project.state["search_confirmation_required"] = True
+                        project.state["search_plan_warnings"] = _search_plan_warnings(
+                            queries, str(spec.get("source_basis") or "")
+                        )
+                        project.status = ProjectStatus.NEEDS_ATTENTION
+                        project.error = (
+                            "检索计划需要你确认；确认前不会向第三方论文源发送查询"
+                        )
+                        self.store.save_project(project)
+                        self._event(
+                            project,
+                            "search_plan_confirmation_required",
+                            {"title": project.title, "queries": queries},
+                        )
+                        return
+                    result = await self.search.search_many(
+                        queries,
+                        limit=min(
+                            100,
+                            max(
+                                24,
+                                configuration["same_field_papers"]
+                                + configuration["target_venue_papers"],
+                            ),
+                        ),
+                        selected=project.selected_sources or self.search.workflow_sources(),
                     )
+                    if not result.papers:
+                        discover_papers = getattr(self.writer, "discover_papers", None)
+                        if callable(discover_papers) and getattr(self.writer, "model", None) is not None:
+                            discovered = await discover_papers("；".join(queries))
+                            if discovered:
+                                result.papers.extend(discovered)
+                    project.state["papers"] = [paper.to_dict() for paper in result.papers]
+                    project.state["source_failures"] = [
+                        item.to_dict() for item in result.failures
+                    ]
+                    project.state["search_filtered_out"] = result.filtered_out
+                    self.store.save_artifact(
+                        project.id,
+                        "papers.json",
+                        json.dumps(project.state["papers"], ensure_ascii=False, indent=2),
+                    )
+                    if not result.papers and not self.allow_empty_search:
+                        failure_summary = "；".join(
+                            f"{item.source}: {item.reason}" for item in result.failures
+                        ) or "无来源错误"
+                        raise RuntimeError(
+                            "没有检索到与研究主题匹配的论文，已停止后续写作以避免领域漂移。"
+                            f"实际检索词：{'；'.join(queries)}；"
+                            f"严格相关性过滤排除了 {result.filtered_out} 条候选；"
+                            f"来源状态：{failure_summary}。请核对资料主题或调整检索词后重新运行"
+                        )
 
             elif stage == Stage.SYNTHESIZING:
                 spec = _spec(project.state["spec"])
@@ -544,21 +817,45 @@ class ResearchWorkflow:
                 spec = _spec(project.state["spec"])
                 evidence = _evidence(project.state.get("evidence", []))
                 project.state["design"] = await self.writer.design(spec, evidence)
+                project.state["figure_story"] = build_figure_story(
+                    project.state.get("configuration", {}),
+                    has_results=any(
+                        item.get("role") == "results"
+                        for item in project.state.get("documents", [])
+                    ),
+                )
                 self.store.save_artifact(
                     project.id,
                     "research-design.json",
                     json.dumps(project.state["design"], ensure_ascii=False, indent=2),
                 )
+                self.store.save_artifact(
+                    project.id,
+                    "figure-story.json",
+                    json.dumps(project.state["figure_story"], ensure_ascii=False, indent=2),
+                )
 
             elif stage == Stage.DRAFTING:
                 documents = self._load_document_text(project)
-                draft = await self.writer.draft(
-                    _spec(project.state["spec"]),
-                    _papers(project.state.get("papers", [])),
-                    _evidence(project.state.get("evidence", [])),
-                    project.state["design"],
-                    documents,
-                )
+                configuration = normalize_configuration(project.state.get("configuration"))
+                if configuration["workflow"] in {"audit", "review"}:
+                    sources = [
+                        item.get("text", "")
+                        for item in documents
+                        if item.get("role", "source") == "source" and item.get("text")
+                    ]
+                    if not sources:
+                        raise RuntimeError("审阅或核查工作必须先上传一份可提取文本的原稿")
+                    draft = sources[0]
+                else:
+                    draft = await self.writer.draft(
+                        _spec(project.state["spec"]),
+                        _papers(project.state.get("papers", [])),
+                        _evidence(project.state.get("evidence", [])),
+                        project.state["design"],
+                        documents,
+                        configuration,
+                    )
                 self.store.save_artifact(project.id, "paper-draft.md", draft)
 
             elif stage == Stage.REVIEWING:
@@ -587,7 +884,39 @@ class ResearchWorkflow:
                 if draft_path is None:
                     raise RuntimeError("缺少论文草稿制品")
                 findings = project.state.get("review", {}).get("findings", [])
-                revised = await self.writer.revise(draft_path.read_text(encoding="utf-8"), findings)
+                feedback = [
+                    item for item in project.state.get("feedback", [])
+                    if item.get("status") == "pending"
+                ]
+                manuscript_feedback = [
+                    item for item in feedback if item.get("scope") in {"manuscript", "all"}
+                ]
+                figure_feedback = [
+                    item for item in feedback if item.get("scope") in {"figures", "all"}
+                ]
+                draft_text = draft_path.read_text(encoding="utf-8")
+                revised = (
+                    draft_text
+                    if feedback and not manuscript_feedback
+                    else await self.writer.revise(draft_text, findings, manuscript_feedback)
+                )
+                figure_feedback_applied = self._apply_figure_feedback(project, figure_feedback)
+                for item in feedback:
+                    manuscript_applied = (
+                        item.get("scope") == "figures" or revised != draft_text
+                    )
+                    figures_applied = (
+                        item.get("scope") == "manuscript"
+                        or item.get("id") in figure_feedback_applied
+                    )
+                    item["status"] = (
+                        "applied" if manuscript_applied and figures_applied else "manual_required"
+                    )
+                    item["components"] = {
+                        "manuscript": "applied" if manuscript_applied else "manual_required",
+                        "figures": "applied" if figures_applied else "manual_required",
+                    }
+                    item["processed_at"] = utc_now()
                 result_sources = [
                     item.get("text", "")
                     for item in self._load_document_text(project)
@@ -617,19 +946,58 @@ class ResearchWorkflow:
                 project.status = ProjectStatus.NEEDS_ATTENTION
                 project.error = f"{stage.value} 已完成，请检查结果后确认继续，或选择该阶段重做"
             self.store.save_project(project)
+
             self._event(project, "stage_completed", {"stage": stage.value})
             if project.state.get("pending_checkpoint"):
                 return
 
         project.stage = Stage.COMPLETED
         final_passed = bool(project.state.get("final_review", {}).get("passed"))
-        project.status = ProjectStatus.COMPLETED if final_passed else ProjectStatus.NEEDS_ATTENTION
+        unresolved_feedback = any(
+            item.get("status") in {"pending", "manual_required"}
+            for item in project.state.get("feedback", [])
+        )
+        project.status = (
+            ProjectStatus.COMPLETED
+            if final_passed and not unresolved_feedback
+            else ProjectStatus.NEEDS_ATTENTION
+        )
         self.store.save_project(project)
         self._event(
             project,
             "workflow_completed",
             {"status": project.status.value, "artifacts": self.store.list_artifacts(project.id)},
         )
+
+    def _apply_figure_feedback(
+        self, project: Project, feedback: Sequence[dict[str, Any]]
+    ) -> set[str]:
+        if not feedback:
+            return set()
+        story = project.state.get("figure_story")
+        if not isinstance(story, list) or not story:
+            return set()
+        changed = False
+        for figure in story:
+            if not isinstance(figure, dict) or figure.get("decision") == "omit":
+                continue
+            changed = True
+            requests = figure.setdefault("feedback_requests", [])
+            requests.extend(
+                {
+                    "feedback_id": item.get("id"),
+                    "text": item.get("text", ""),
+                    "recorded_at": utc_now(),
+                }
+                for item in feedback
+            )
+            figure["revision_requested"] = True
+        self.store.save_artifact(
+            project.id,
+            "figure-story.json",
+            json.dumps(story, ensure_ascii=False, indent=2),
+        )
+        return {str(item.get("id")) for item in feedback} if changed else set()
 
     def _require_project(self, project_id: str) -> Project:
         project = self.store.get_project(project_id)
@@ -658,6 +1026,7 @@ class ResearchWorkflow:
         scope = self.writer.scope
         parameters = list(inspect.signature(scope).parameters.values())
         documents = project.state.get("documents", [])
+        configuration = normalize_configuration(project.state.get("configuration"))
         document_parameter = next(
             (parameter for parameter in parameters if parameter.name == "documents"),
             None,
@@ -672,9 +1041,12 @@ class ResearchWorkflow:
             inspect.Parameter.POSITIONAL_OR_KEYWORD,
             inspect.Parameter.KEYWORD_ONLY,
         }:
-            return await scope(project.idea, documents=documents)
+            kwargs: dict[str, Any] = {"documents": documents}
+            if any(parameter.name == "configuration" for parameter in parameters) or has_kwargs:
+                kwargs["configuration"] = configuration
+            return await scope(project.idea, **kwargs)
         if has_kwargs:
-            return await scope(project.idea, documents=documents)
+            return await scope(project.idea, documents=documents, configuration=configuration)
         if document_parameter is not None or has_varargs:
             return await scope(project.idea, documents)
         return await scope(project.idea)

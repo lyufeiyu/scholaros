@@ -6,12 +6,12 @@ import tempfile
 from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from scholaros import __version__
 from scholaros.config import Settings
@@ -23,9 +23,36 @@ from scholaros.papers import (
 )
 from scholaros.storage import ProjectBusyError
 from scholaros.workflow import ResearchWorkflow
+from scholaros.workspace import normalize_configuration
 
 logger = logging.getLogger(__name__)
 STATIC_ROOT = Path(__file__).with_name("static")
+
+
+class ProjectConfiguration(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workflow: Literal[
+        "build_from_materials", "rewrite_existing", "audit", "review", "revise", "transfer"
+    ] = "build_from_materials"
+    scene: Literal["journal", "conference", "report", "review", "competition", "other"] = (
+        "journal"
+    )
+    target_name: str = Field(default="", max_length=200)
+    output_language: Literal["zh", "en", "multilingual", "other"] = "zh"
+    research_mode: Literal["agent_decide", "required", "materials_only"] = "agent_decide"
+    requested_scope: Literal["manuscript", "local_delivery", "submission_package"] = (
+        "local_delivery"
+    )
+    author_voice: Literal["off", "standard", "strict"] = "standard"
+    same_field_papers: int = Field(default=3, ge=1, le=50)
+    target_venue_papers: int = Field(default=3, ge=1, le=50)
+    reference_count_mode: Literal["venue_average", "custom"] = "venue_average"
+    reference_count: int | None = Field(default=None, ge=1, le=500)
+    mechanism_figure: Literal["prefer", "auto", "omit"] = "prefer"
+    formats: list[Literal["md", "docx", "tex", "pdf"]] = Field(
+        default_factory=lambda: ["md", "docx", "tex", "pdf"], min_length=1
+    )
 
 
 class ProjectCreate(BaseModel):
@@ -33,11 +60,13 @@ class ProjectCreate(BaseModel):
     sources: list[str] = Field(default_factory=list)
     run_now: bool = True
     guided: bool = False
+    configuration: ProjectConfiguration | None = None
 
 
 class SearchRequest(BaseModel):
     query: str = Field(min_length=2, max_length=500)
     sources: list[str] | None = None
+    venue_sources: list[str] | None = None
     limit: int = Field(default=20, ge=1, le=100)
     natural_language: bool = False
     field: SearchField = SearchField.ALL
@@ -48,6 +77,18 @@ class SearchRequest(BaseModel):
 
 class SearchPlanRevision(BaseModel):
     idea: str | None = Field(default=None, min_length=8, max_length=MAX_RESEARCH_IDEA_LENGTH)
+
+
+class DecisionRequest(BaseModel):
+    decision_type: Literal["contribution", "figure"]
+    item_id: str = Field(min_length=1, max_length=100)
+    value: str = Field(min_length=1, max_length=200)
+    comment: str = Field(default="", max_length=5000)
+
+
+class FeedbackRequest(BaseModel):
+    scope: Literal["manuscript", "figures", "all"] = "manuscript"
+    text: str = Field(min_length=2, max_length=32_000)
 
 
 @lru_cache(maxsize=1)
@@ -136,6 +177,9 @@ def create_app(workflow: ResearchWorkflow | None = None) -> FastAPI:
         values = []
         for project in flow.store.list_projects():
             value = project.to_dict()
+            value["state"]["configuration"] = normalize_configuration(
+                value["state"].get("configuration")
+            )
             value["is_active"] = project.id in app.state.running_projects
             values.append(value)
         return values
@@ -144,7 +188,14 @@ def create_app(workflow: ResearchWorkflow | None = None) -> FastAPI:
     async def create_project(request: ProjectCreate) -> dict[str, Any]:
         flow: ResearchWorkflow = app.state.workflow
         try:
-            project = flow.create_project(request.idea, request.sources, guided=request.guided)
+            project = flow.create_project(
+                request.idea,
+                request.sources,
+                guided=request.guided,
+                configuration=(
+                    request.configuration.model_dump() if request.configuration is not None else None
+                ),
+            )
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         started = False
@@ -164,7 +215,101 @@ def create_app(workflow: ResearchWorkflow | None = None) -> FastAPI:
         if project is None:
             raise HTTPException(404, "项目不存在")
         value = project.to_dict()
+        value["state"]["configuration"] = normalize_configuration(
+            value["state"].get("configuration")
+        )
         value["is_active"] = project_id in app.state.running_projects
+        value["artifacts"] = flow.store.list_artifacts(project_id)
+        return value
+
+    @app.put("/api/projects/{project_id}/configuration")
+    async def update_configuration(
+        project_id: str, request: ProjectConfiguration
+    ) -> dict[str, Any]:
+        flow: ResearchWorkflow = app.state.workflow
+        if project_id in app.state.running_projects:
+            raise HTTPException(409, "项目正在运行，不能修改配置")
+        try:
+            project = flow.update_configuration(project_id, request.model_dump())
+        except KeyError as exc:
+            raise HTTPException(404, "项目不存在") from exc
+        except ProjectBusyError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        value = project.to_dict()
+        value["state"]["configuration"] = normalize_configuration(
+            value["state"].get("configuration")
+        )
+        value["is_active"] = False
+        value["artifacts"] = flow.store.list_artifacts(project_id)
+        return value
+
+    @app.post("/api/projects/{project_id}/decisions")
+    async def save_decision(project_id: str, request: DecisionRequest) -> dict[str, Any]:
+        flow: ResearchWorkflow = app.state.workflow
+        if project_id in app.state.running_projects:
+            raise HTTPException(409, "项目正在运行，不能保存选择")
+        try:
+            project = flow.save_decision(
+                project_id,
+                decision_type=request.decision_type,
+                item_id=request.item_id,
+                value=request.value,
+                comment=request.comment,
+            )
+        except KeyError as exc:
+            raise HTTPException(404, "项目不存在") from exc
+        except ProjectBusyError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        value = project.to_dict()
+        value["is_active"] = False
+        value["artifacts"] = flow.store.list_artifacts(project_id)
+        return value
+
+    @app.post("/api/projects/{project_id}/feedback", status_code=201)
+    async def submit_feedback(project_id: str, request: FeedbackRequest) -> dict[str, Any]:
+        flow: ResearchWorkflow = app.state.workflow
+        if project_id in app.state.running_projects:
+            raise HTTPException(409, "项目正在运行，不能提交返修意见")
+        try:
+            project = flow.add_feedback(project_id, scope=request.scope, text=request.text)
+        except KeyError as exc:
+            raise HTTPException(404, "项目不存在") from exc
+        except ProjectBusyError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        value = project.to_dict()
+        value["is_active"] = False
+        value["artifacts"] = flow.store.list_artifacts(project_id)
+        return value
+
+    @app.post("/api/projects/{project_id}/delivery")
+    async def prepare_project_delivery(project_id: str) -> dict[str, Any]:
+        flow: ResearchWorkflow = app.state.workflow
+        if project_id in app.state.running_projects:
+            raise HTTPException(409, "项目正在运行，不能准备交付包")
+        try:
+            project = flow.prepare_delivery(project_id)
+        except KeyError as exc:
+            raise HTTPException(404, "项目不存在") from exc
+        except ProjectBusyError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        value = project.to_dict()
+        value["is_active"] = False
         value["artifacts"] = flow.store.list_artifacts(project_id)
         return value
 
@@ -313,7 +458,7 @@ def create_app(workflow: ResearchWorkflow | None = None) -> FastAPI:
             raise HTTPException(422, "role 只能是 source 或 results")
         suffix = Path(file.filename or "").suffix.lower()
         if suffix not in flow.ingestor.allowed_suffixes:
-            raise HTTPException(415, "仅支持 PDF、TXT 和 Markdown")
+            raise HTTPException(415, "仅支持 PDF、Word、TXT、Markdown、LaTeX、BibTeX、CSV 和 JSON")
         raw = await file.read(20 * 1024 * 1024 + 1)
         if len(raw) > 20 * 1024 * 1024:
             raise HTTPException(413, "文件不能超过 20 MiB")
@@ -360,7 +505,27 @@ def create_app(workflow: ResearchWorkflow | None = None) -> FastAPI:
                 author_affiliation=request.author_affiliation,
                 author_topic=request.author_topic,
                 author_venue=request.author_venue,
+                venue_sources=request.venue_sources,
             )
+            normalized_input = " ".join(request.query.casefold().split())
+            exact_title_missing = (
+                len(normalized_input.split()) >= 6
+                and not any("\u3400" <= char <= "\u9fff" for char in request.query)
+                and not any(
+                    normalized_input == " ".join(paper.title.casefold().split())
+                    for paper in result.papers
+                )
+            )
+            writer = getattr(flow, "writer", None)
+            discover_papers = getattr(writer, "discover_papers", None)
+            if (
+                (not result.papers or exact_title_missing)
+                and callable(discover_papers)
+                and getattr(writer, "model", None) is not None
+            ):
+                discovered = await discover_papers(request.query, request.venue_sources or ())
+                if discovered:
+                    result.papers = discovered + result.papers
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         plan_value = {

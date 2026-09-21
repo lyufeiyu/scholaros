@@ -1,0 +1,102 @@
+name: Build portable PaperSpine5 suites
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux-x86_64
+            asset: paperspine5-suite-0.4.0-alpha.1-dev-linux-x86_64.zip
+          - runner: macos-15
+            platform: macos-arm64
+            asset: paperspine5-suite-0.4.0-alpha.1-dev-macos-arm64.zip
+          - runner: macos-15-intel
+            platform: macos-x86_64
+            asset: paperspine5-suite-0.4.0-alpha.1-dev-macos-x86_64.zip
+    runs-on: ${{ matrix.runner }}
+    env:
+      PYTHONUTF8: "1"
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Read pinned runtime lock
+        shell: bash
+        run: |
+          LOCK="paperspine5/core/06_插件化/runtime_vendor/locks/${{ matrix.platform }}.json"
+          export LOCK
+          echo "LOCK=$LOCK" >> "$GITHUB_ENV"
+          python - <<'PY' >> "$GITHUB_ENV"
+          import json, os
+          from pathlib import Path
+          lock=json.loads(Path(os.environ["LOCK"]).read_text())
+          print("RUNTIME_URL="+lock["interpreter"]["url"])
+          print("RUNTIME_SHA256="+lock["interpreter"]["sha256"])
+          print("RUNTIME_ASSET="+lock["interpreter"]["asset"])
+          PY
+      - name: Download current verified Windows source suite
+        shell: bash
+        run: gh release download v0.4.0-alpha.1-dev --pattern paperspine5-suite-0.4.0-alpha.1-dev.zip --dir work
+      - name: Download and verify portable Python
+        shell: bash
+        run: |
+          mkdir -p work
+          curl --fail --location --retry 3 "$RUNTIME_URL" --output "work/$RUNTIME_ASSET"
+          echo "$RUNTIME_SHA256  work/$RUNTIME_ASSET" | shasum -a 256 --check
+      - name: Prepare platform runtime
+        shell: bash
+        run: |
+          python paperspine5/core/06_插件化/release/prepare_posix_runtime.py \
+            --lock "$LOCK" \
+            --interpreter-archive "work/$RUNTIME_ASSET" \
+            --base-suite work/paperspine5-suite-0.4.0-alpha.1-dev.zip \
+            --destination work/runtime
+      - name: Build release and update fixture
+        shell: bash
+        run: |
+          mkdir -p out
+          python paperspine5/core/06_插件化/release/build_portable_suite.py \
+            --base-suite work/paperspine5-suite-0.4.0-alpha.1-dev.zip \
+            --runtime-root work/runtime/python \
+            --lock "$LOCK" --output "out/${{ matrix.asset }}"
+          python paperspine5/core/06_插件化/release/build_portable_suite.py \
+            --base-suite work/paperspine5-suite-0.4.0-alpha.1-dev.zip \
+            --runtime-root work/runtime/python \
+            --lock "$LOCK" --variant update-smoke --output out/successor.zip
+      - name: Verify install, REST/MCP, update and rollback
+        shell: bash
+        run: |
+          export PYTHONPATH="paperspine5/core/06_插件化/release"
+          python - <<'PY'
+          from suite_release import extract_verified_bundle
+          extract_verified_bundle("out/${{ matrix.asset }}", "work/bootstrap")
+          PY
+          chmod +x work/bootstrap/paperspine
+          INITIAL=$(python - <<'PY'
+          import json, zipfile
+          with zipfile.ZipFile("out/${{ matrix.asset }}") as z:
+              print(json.loads(z.read("suite-manifest.json"))["suite"]["build_id"])
+          PY
+          )
+          work/bootstrap/paperspine install --profile-root work/profile --bundle "out/${{ matrix.asset }}" --operation-id install
+          work/bootstrap/paperspine first-start --profile-root work/profile
+          work/bootstrap/paperspine update --profile-root work/profile --bundle out/successor.zip --operation-id update --confirm
+          work/bootstrap/paperspine first-start --profile-root work/profile
+          work/bootstrap/paperspine rollback --profile-root work/profile --target-build-id "$INITIAL" --operation-id rollback
+          work/bootstrap/paperspine first-start --profile-root work/profile
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          path: ${{ github.workspace }}/out/${{ matrix.asset }}
+          if-no-files-found: error
+          compression-level: 0

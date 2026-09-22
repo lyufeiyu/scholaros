@@ -27,6 +27,13 @@ from scholaros.workspace import normalize_configuration
 
 logger = logging.getLogger(__name__)
 STATIC_ROOT = Path(__file__).with_name("static")
+HIDDEN_LEGACY_OUTPUTS = frozenset(
+    {"paper.docx", "paper.pdf", "contribution-options.json"}
+)
+
+
+def _visible_artifacts(names: list[str]) -> list[str]:
+    return [name for name in names if name not in HIDDEN_LEGACY_OUTPUTS]
 
 
 class ProjectConfiguration(BaseModel):
@@ -50,8 +57,8 @@ class ProjectConfiguration(BaseModel):
     reference_count_mode: Literal["venue_average", "custom"] = "venue_average"
     reference_count: int | None = Field(default=None, ge=1, le=500)
     mechanism_figure: Literal["prefer", "auto", "omit"] = "prefer"
-    formats: list[Literal["md", "docx", "tex", "pdf"]] = Field(
-        default_factory=lambda: ["md", "docx", "tex", "pdf"], min_length=1
+    formats: list[Literal["md", "tex"]] = Field(
+        default_factory=lambda: ["md", "tex"], min_length=1
     )
 
 
@@ -59,7 +66,7 @@ class ProjectCreate(BaseModel):
     idea: str = Field(min_length=8, max_length=MAX_RESEARCH_IDEA_LENGTH)
     sources: list[str] = Field(default_factory=list)
     run_now: bool = True
-    guided: bool = False
+    guided: bool = True
     configuration: ProjectConfiguration | None = None
 
 
@@ -80,7 +87,7 @@ class SearchPlanRevision(BaseModel):
 
 
 class DecisionRequest(BaseModel):
-    decision_type: Literal["contribution", "figure"]
+    decision_type: Literal["figure"]
     item_id: str = Field(min_length=1, max_length=100)
     value: str = Field(min_length=1, max_length=200)
     comment: str = Field(default="", max_length=5000)
@@ -89,6 +96,12 @@ class DecisionRequest(BaseModel):
 class FeedbackRequest(BaseModel):
     scope: Literal["manuscript", "figures", "all"] = "manuscript"
     text: str = Field(min_length=2, max_length=32_000)
+
+
+class StageEditRequest(BaseModel):
+    text: str = Field(default="", max_length=12_000)
+    title: str | None = Field(default=None, max_length=300)
+    keywords: list[str] | None = Field(default=None, max_length=10)
 
 
 @lru_cache(maxsize=1)
@@ -101,9 +114,19 @@ def create_app(workflow: ResearchWorkflow | None = None) -> FastAPI:
         title="ScholarOS",
         version=__version__,
         description="面向研究者的证据追踪、方法设计与写作辅助工作台",
+        docs_url=None,
+        redoc_url=None,
+        openapi_tags=[
+            {"name": "系统", "description": "服务健康、OpenAPI schema 与运行状态。"},
+            {"name": "项目", "description": "创建、读取、配置和删除研究项目。"},
+            {"name": "工作流", "description": "运行、暂停、中断、恢复、重做与阶段确认。"},
+            {"name": "材料与制品", "description": "上传材料、读取制品和历史版本。"},
+            {"name": "研究检索", "description": "准备检索计划并执行独立论文检索。"},
+        ],
     )
     app.state.workflow = workflow or get_workflow()
     app.state.tasks = set()
+    app.state.project_tasks = {}
     app.state.running_projects = set()
     app.mount("/static", StaticFiles(directory=STATIC_ROOT), name="static")
 
@@ -133,6 +156,7 @@ def create_app(workflow: ResearchWorkflow | None = None) -> FastAPI:
             app.state.running_projects.add(project_id)
             task = asyncio.create_task(flow._run_locked(project_id, restart=restart))
             app.state.tasks.add(task)
+            app.state.project_tasks[project_id] = task
         except BaseException:
             app.state.running_projects.discard(project_id)
             project_lock.__exit__(None, None, None)
@@ -140,6 +164,8 @@ def create_app(workflow: ResearchWorkflow | None = None) -> FastAPI:
 
         def finished(completed: asyncio.Task[Any]) -> None:
             app.state.tasks.discard(completed)
+            if app.state.project_tasks.get(project_id) is completed:
+                app.state.project_tasks.pop(project_id, None)
             app.state.running_projects.discard(project_id)
             try:
                 completed.result()
@@ -148,6 +174,7 @@ def create_app(workflow: ResearchWorkflow | None = None) -> FastAPI:
             except Exception:
                 logger.exception("ScholarOS 项目 %s 后台运行失败", project_id)
             finally:
+                flow.interrupt_requested.discard(project_id)
                 project_lock.__exit__(None, None, None)
 
         task.add_done_callback(finished)
@@ -157,7 +184,11 @@ def create_app(workflow: ResearchWorkflow | None = None) -> FastAPI:
     async def home() -> str:
         return (STATIC_ROOT / "index.html").read_text(encoding="utf-8")
 
-    @app.get("/health")
+    @app.get("/docs", response_class=HTMLResponse, include_in_schema=False)
+    async def custom_docs() -> str:
+        return (STATIC_ROOT / "api-docs.html").read_text(encoding="utf-8")
+
+    @app.get("/health", tags=["系统"])
     async def health() -> dict[str, Any]:
         flow: ResearchWorkflow = app.state.workflow
         return {
@@ -171,7 +202,7 @@ def create_app(workflow: ResearchWorkflow | None = None) -> FastAPI:
             "sources": flow.search.catalog(),
         }
 
-    @app.get("/api/projects")
+    @app.get("/api/projects", tags=["项目"])
     async def list_projects() -> list[dict[str, Any]]:
         flow: ResearchWorkflow = app.state.workflow
         values = []
@@ -184,7 +215,7 @@ def create_app(workflow: ResearchWorkflow | None = None) -> FastAPI:
             values.append(value)
         return values
 
-    @app.post("/api/projects", status_code=201)
+    @app.post("/api/projects", status_code=201, tags=["项目"])
     async def create_project(request: ProjectCreate) -> dict[str, Any]:
         flow: ResearchWorkflow = app.state.workflow
         try:
@@ -206,23 +237,28 @@ def create_app(workflow: ResearchWorkflow | None = None) -> FastAPI:
                 raise HTTPException(409, str(exc)) from exc
         value = project.to_dict()
         value["is_active"] = started
+        value["artifacts"] = []
+        value["history"] = []
         return value
 
-    @app.get("/api/projects/{project_id}")
+    @app.get("/api/projects/{project_id}", tags=["项目"])
     async def get_project(project_id: str) -> dict[str, Any]:
         flow: ResearchWorkflow = app.state.workflow
         project = flow.store.get_project(project_id)
         if project is None:
             raise HTTPException(404, "项目不存在")
+        if project_id not in app.state.running_projects:
+            project = flow.ensure_preview_artifacts(project_id)
         value = project.to_dict()
         value["state"]["configuration"] = normalize_configuration(
             value["state"].get("configuration")
         )
         value["is_active"] = project_id in app.state.running_projects
-        value["artifacts"] = flow.store.list_artifacts(project_id)
+        value["artifacts"] = _visible_artifacts(flow.store.list_artifacts(project_id))
+        value["history"] = flow.store.list_history(project_id)
         return value
 
-    @app.put("/api/projects/{project_id}/configuration")
+    @app.put("/api/projects/{project_id}/configuration", tags=["项目"])
     async def update_configuration(
         project_id: str, request: ProjectConfiguration
     ) -> dict[str, Any]:
@@ -244,10 +280,11 @@ def create_app(workflow: ResearchWorkflow | None = None) -> FastAPI:
             value["state"].get("configuration")
         )
         value["is_active"] = False
-        value["artifacts"] = flow.store.list_artifacts(project_id)
+        value["artifacts"] = _visible_artifacts(flow.store.list_artifacts(project_id))
+        value["history"] = flow.store.list_history(project_id)
         return value
 
-    @app.post("/api/projects/{project_id}/decisions")
+    @app.post("/api/projects/{project_id}/decisions", tags=["工作流"])
     async def save_decision(project_id: str, request: DecisionRequest) -> dict[str, Any]:
         flow: ResearchWorkflow = app.state.workflow
         if project_id in app.state.running_projects:
@@ -270,10 +307,11 @@ def create_app(workflow: ResearchWorkflow | None = None) -> FastAPI:
             raise HTTPException(422, str(exc)) from exc
         value = project.to_dict()
         value["is_active"] = False
-        value["artifacts"] = flow.store.list_artifacts(project_id)
+        value["artifacts"] = _visible_artifacts(flow.store.list_artifacts(project_id))
+        value["history"] = flow.store.list_history(project_id)
         return value
 
-    @app.post("/api/projects/{project_id}/feedback", status_code=201)
+    @app.post("/api/projects/{project_id}/feedback", status_code=201, tags=["工作流"])
     async def submit_feedback(project_id: str, request: FeedbackRequest) -> dict[str, Any]:
         flow: ResearchWorkflow = app.state.workflow
         if project_id in app.state.running_projects:
@@ -290,10 +328,47 @@ def create_app(workflow: ResearchWorkflow | None = None) -> FastAPI:
             raise HTTPException(422, str(exc)) from exc
         value = project.to_dict()
         value["is_active"] = False
-        value["artifacts"] = flow.store.list_artifacts(project_id)
+        value["artifacts"] = _visible_artifacts(flow.store.list_artifacts(project_id))
+        value["history"] = flow.store.list_history(project_id)
         return value
 
-    @app.post("/api/projects/{project_id}/delivery")
+    @app.put("/api/projects/{project_id}/stage-edits/{stage}", tags=["工作流"])
+    async def save_stage_edit(
+        project_id: str, stage: Stage, request: StageEditRequest
+    ) -> dict[str, Any]:
+        flow: ResearchWorkflow = app.state.workflow
+        if project_id in app.state.running_projects:
+            raise HTTPException(409, "项目正在运行，不能编辑阶段要求")
+        try:
+            project = flow.save_stage_edit(
+                project_id,
+                stage=stage,
+                text=request.text,
+                title=request.title,
+                keywords=request.keywords,
+            )
+        except KeyError as exc:
+            raise HTTPException(404, "项目不存在") from exc
+        except ProjectBusyError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+        value = project.to_dict()
+        value["is_active"] = False
+        value["artifacts"] = _visible_artifacts(flow.store.list_artifacts(project_id))
+        value["history"] = flow.store.list_history(project_id)
+        return value
+
+    @app.post("/api/projects/{project_id}/stage-edits/{stage}/confirm", status_code=202, tags=["工作流"])
+    async def confirm_stage_edit(project_id: str, stage: Stage) -> dict[str, str]:
+        flow: ResearchWorkflow = app.state.workflow
+        if project_id in app.state.running_projects:
+            raise HTTPException(409, "项目正在运行")
+        return schedule_action(
+            project_id, lambda: flow.confirm_stage_edit_locked(project_id, stage=stage)
+        )
+
+    @app.post("/api/projects/{project_id}/delivery", tags=["材料与制品"])
     async def prepare_project_delivery(project_id: str) -> dict[str, Any]:
         flow: ResearchWorkflow = app.state.workflow
         if project_id in app.state.running_projects:
@@ -310,10 +385,28 @@ def create_app(workflow: ResearchWorkflow | None = None) -> FastAPI:
             raise HTTPException(422, str(exc)) from exc
         value = project.to_dict()
         value["is_active"] = False
-        value["artifacts"] = flow.store.list_artifacts(project_id)
+        value["artifacts"] = _visible_artifacts(flow.store.list_artifacts(project_id))
+        value["history"] = flow.store.list_history(project_id)
         return value
 
-    @app.post("/api/projects/{project_id}/run", status_code=202)
+    @app.post("/api/projects/{project_id}/interrupt", status_code=202, tags=["工作流"])
+    async def interrupt_project(project_id: str) -> dict[str, str]:
+        flow: ResearchWorkflow = app.state.workflow
+        project = flow.store.get_project(project_id)
+        if project is None:
+            raise HTTPException(404, "项目不存在")
+        task = app.state.project_tasks.get(project_id)
+        if project_id not in app.state.running_projects or task is None or task.done():
+            raise HTTPException(409, "项目当前没有正在运行的任务")
+        project.status = ProjectStatus.NEEDS_ATTENTION
+        project.state["interrupted"] = True
+        project.error = "用户主动中断，可从断点继续"
+        flow.store.save_project(project)
+        flow.request_interrupt(project_id)
+        task.cancel()
+        return {"status": "interrupting", "project_id": project_id}
+
+    @app.post("/api/projects/{project_id}/run", status_code=202, tags=["工作流"])
     async def run_project(project_id: str, restart: bool = False) -> dict[str, str]:
         flow: ResearchWorkflow = app.state.workflow
         project = flow.store.get_project(project_id)
@@ -334,7 +427,7 @@ def create_app(workflow: ResearchWorkflow | None = None) -> FastAPI:
             raise HTTPException(409, "项目正在运行")
         return {"status": "accepted", "project_id": project_id}
 
-    @app.post("/api/projects/{project_id}/confirm-search", status_code=202)
+    @app.post("/api/projects/{project_id}/confirm-search", status_code=202, tags=["工作流"])
     async def confirm_search_plan(project_id: str) -> dict[str, str]:
         flow: ResearchWorkflow = app.state.workflow
         if project_id in app.state.running_projects:
@@ -367,29 +460,37 @@ def create_app(workflow: ResearchWorkflow | None = None) -> FastAPI:
             raise HTTPException(409, "项目正在运行")
         return {"status": "accepted", "project_id": project_id}
 
-    @app.post("/api/projects/{project_id}/resume", status_code=202)
+    @app.post("/api/projects/{project_id}/resume", status_code=202, tags=["工作流"])
     async def resume_project(project_id: str) -> dict[str, str]:
         flow: ResearchWorkflow = app.state.workflow
         return schedule_action(project_id, lambda: flow.prepare_resume(project_id))
 
-    @app.post("/api/projects/{project_id}/rerun", status_code=202)
+    @app.post("/api/projects/{project_id}/rerun", status_code=202, tags=["工作流"])
     async def rerun_project(project_id: str, stage: Stage) -> dict[str, str]:
         flow: ResearchWorkflow = app.state.workflow
         return schedule_action(project_id, lambda: flow.prepare_rerun(project_id, stage))
 
-    @app.post("/api/projects/{project_id}/approve", status_code=202)
+    @app.post("/api/projects/{project_id}/approve", status_code=202, tags=["工作流"])
     async def approve_project(project_id: str) -> dict[str, str]:
         flow: ResearchWorkflow = app.state.workflow
         return schedule_action(project_id, lambda: flow.approve_checkpoint(project_id))
 
-    @app.get("/api/projects/{project_id}/history")
+    @app.get("/api/projects/{project_id}/history", tags=["材料与制品"])
     async def history(project_id: str) -> list[dict[str, Any]]:
         flow: ResearchWorkflow = app.state.workflow
         if flow.store.get_project(project_id) is None:
             raise HTTPException(404, "项目不存在")
         return flow.store.list_history(project_id)
 
-    @app.get("/api/projects/{project_id}/history/{revision}/{name}")
+    @app.get("/api/projects/{project_id}/history/{revision}", tags=["材料与制品"])
+    async def history_revision(project_id: str, revision: str) -> dict[str, Any]:
+        flow: ResearchWorkflow = app.state.workflow
+        manifest = flow.store.history_manifest(project_id, revision)
+        if manifest is None:
+            raise HTTPException(404, "历史版本不存在")
+        return manifest
+
+    @app.get("/api/projects/{project_id}/history/{revision}/{name}", tags=["材料与制品"])
     async def history_artifact(project_id: str, revision: str, name: str) -> FileResponse:
         flow: ResearchWorkflow = app.state.workflow
         path = flow.store.history_artifact_path(project_id, revision, name)
@@ -397,7 +498,7 @@ def create_app(workflow: ResearchWorkflow | None = None) -> FastAPI:
             raise HTTPException(404, "历史制品不存在")
         return FileResponse(path, filename=name)
 
-    @app.post("/api/projects/{project_id}/reject-search", status_code=202)
+    @app.post("/api/projects/{project_id}/reject-search", status_code=202, tags=["工作流"])
     async def reject_search_plan(
         project_id: str, request: SearchPlanRevision
     ) -> dict[str, str]:
@@ -421,7 +522,7 @@ def create_app(workflow: ResearchWorkflow | None = None) -> FastAPI:
             raise HTTPException(409, "项目正在运行")
         return {"status": "accepted", "project_id": project_id}
 
-    @app.delete("/api/projects/{project_id}")
+    @app.delete("/api/projects/{project_id}", tags=["项目"])
     async def delete_project(project_id: str) -> dict[str, str]:
         flow: ResearchWorkflow = app.state.workflow
         if project_id in app.state.running_projects:
@@ -436,7 +537,7 @@ def create_app(workflow: ResearchWorkflow | None = None) -> FastAPI:
             raise HTTPException(404, "项目不存在")
         return {"status": "deleted", "project_id": project_id}
 
-    @app.get("/api/projects/{project_id}/events")
+    @app.get("/api/projects/{project_id}/events", tags=["材料与制品"])
     async def project_events(project_id: str, after: int = 0) -> list[dict[str, Any]]:
         flow: ResearchWorkflow = app.state.workflow
         project = flow.store.get_project(project_id)
@@ -444,7 +545,7 @@ def create_app(workflow: ResearchWorkflow | None = None) -> FastAPI:
             raise HTTPException(404, "项目不存在")
         return flow.store.list_events(project_id, after)
 
-    @app.post("/api/projects/{project_id}/documents", status_code=201)
+    @app.post("/api/projects/{project_id}/documents", status_code=201, tags=["材料与制品"])
     async def upload_document(
         project_id: str, file: UploadFile = File(...), role: str = "source"
     ) -> dict[str, Any]:
@@ -478,15 +579,17 @@ def create_app(workflow: ResearchWorkflow | None = None) -> FastAPI:
         finally:
             temp.unlink(missing_ok=True)
 
-    @app.get("/api/projects/{project_id}/artifacts/{name}")
+    @app.get("/api/projects/{project_id}/artifacts/{name}", tags=["材料与制品"])
     async def artifact(project_id: str, name: str) -> FileResponse:
         flow: ResearchWorkflow = app.state.workflow
+        if name in HIDDEN_LEGACY_OUTPUTS:
+            raise HTTPException(404, "制品不存在")
         path = flow.store.artifact_path(project_id, name)
         if path is None:
             raise HTTPException(404, "制品不存在")
         return FileResponse(path, filename=name)
 
-    @app.post("/api/search")
+    @app.post("/api/search", tags=["研究检索"])
     async def search_papers(request: SearchRequest) -> dict[str, Any]:
         flow: ResearchWorkflow = app.state.workflow
         try:
@@ -507,25 +610,20 @@ def create_app(workflow: ResearchWorkflow | None = None) -> FastAPI:
                 author_venue=request.author_venue,
                 venue_sources=request.venue_sources,
             )
-            normalized_input = " ".join(request.query.casefold().split())
-            exact_title_missing = (
-                len(normalized_input.split()) >= 6
-                and not any("\u3400" <= char <= "\u9fff" for char in request.query)
-                and not any(
-                    normalized_input == " ".join(paper.title.casefold().split())
-                    for paper in result.papers
-                )
-            )
             writer = getattr(flow, "writer", None)
             discover_papers = getattr(writer, "discover_papers", None)
             if (
-                (not result.papers or exact_title_missing)
-                and callable(discover_papers)
-                and getattr(writer, "model", None) is not None
+                callable(discover_papers)
+                and plan.field == SearchField.ALL
             ):
                 discovered = await discover_papers(request.query, request.venue_sources or ())
                 if discovered:
-                    result.papers = discovered + result.papers
+                    result.papers = flow.search.merge_papers(
+                        plan.search_query,
+                        [*result.papers, *discovered],
+                        request.limit,
+                        require_match=True,
+                    )
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         plan_value = {

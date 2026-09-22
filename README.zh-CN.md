@@ -6,11 +6,12 @@
 
 [English](./README.md) | **简体中文**
 
+[![版本](https://img.shields.io/badge/version-0.3.0-456B93)](./pyproject.toml)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](./LICENSE)
 [![Checks](https://img.shields.io/badge/checks-run_locally-586069)](./scripts/check.sh)
 
-[快速开始](#快速开始) · [功能](#功能) · [检索](#检索) · [架构](#架构概览) · [文档](#文档) · [贡献](./CONTRIBUTING.zh-CN.md)
+[快速开始](#快速开始) · [最近更新](#最近更新) · [功能](#功能) · [检索](#检索) · [架构](#架构概览) · [文档](#文档) · [贡献](./CONTRIBUTING.zh-CN.md)
 
 </div>
 
@@ -22,19 +23,24 @@ Question → Scope → Search → Evidence → Design → Draft → Review → R
 
 终端命令行和 Web 工作台共用同一套工作流。系统提供候选研究方案、证据记录和研究草稿，最终判断与学术责任始终由研究者承担。没有实验数据时，只输出研究方案以及图表、表格的设计说明，不生成虚构结果。
 
+## 📰 最近更新
+
+### 2026 年 9 月 22 日 · v0.3.0 —— 交互式研究工作台
+
+- Web、CLI 和终端入口默认采用逐阶段交互；明确选择 `--automatic` 时才一步完成。
+- 运行中的项目可以中断，并从保存的断点继续。
+- 每个完成阶段和最终工作流都会自动保存到项目版本时间线；点击历史版本可在“当前研究项目”中以只读方式查看当时的完整状态。
+- 图件规划支持 Mermaid 流程图，表格规划支持可读表格呈现。
+- Web 工作台改为冷静蓝灰主题，最后阶段聚合为项目与材料总览；API 文档仍可通过 `/docs` 访问。
+- LaTeX 输出统一使用仓库 `templates/ieee/` 中的英文 IEEEtran 期刊模板。
+
 ## 产品截图
 
 <table>
   <tr>
-    <td colspan="2" width="33.33%" align="center"><a href="./images/research-workspace-overview.jpg"><img src="./images/research-workspace-overview.jpg" width="100%" height="170" alt="研究工作台概览"></a><br><sub>研究工作台概览</sub></td>
-    <td colspan="2" width="33.33%" align="center"><a href="./images/research-project-workflow.jpg"><img src="./images/research-project-workflow.jpg" width="100%" height="170" alt="研究项目工作流"></a><br><sub>研究项目工作流</sub></td>
-    <td colspan="2" width="33.33%" align="center"><a href="./images/cross-source-paper-search.jpg"><img src="./images/cross-source-paper-search.jpg" width="100%" height="170" alt="跨源论文检索"></a><br><sub>跨源论文检索</sub></td>
-  </tr>
-  <tr>
-    <td width="16.67%"></td>
-    <td colspan="2" width="33.33%" align="center"><a href="./images/terminal-workspace.jpg"><img src="./images/terminal-workspace.jpg" width="100%" height="170" alt="终端工作台"></a><br><sub>终端工作台</sub></td>
-    <td colspan="2" width="33.33%" align="center"><a href="./images/terminal-web-server.jpg"><img src="./images/terminal-web-server.jpg" width="100%" height="170" alt="终端 Web 服务"></a><br><sub>终端 Web 服务</sub></td>
-    <td width="16.67%"></td>
+    <td width="33.33%" align="center"><a href="./images/ScholarOSv0.3.0-home.jpg"><img src="./images/ScholarOSv0.3.0-home.jpg" width="100%" alt="ScholarOS 首页工作台"></a><br><sub>首页</sub></td>
+    <td width="33.33%" align="center"><a href="./images/ScholarOSv0.3.0-project.jpg"><img src="./images/ScholarOSv0.3.0-project.jpg" width="100%" alt="ScholarOS 项目工作台"></a><br><sub>项目</sub></td>
+    <td width="33.33%" align="center"><a href="./images/ScholarOSv0.3.0-detail.jpg"><img src="./images/ScholarOSv0.3.0-detail.jpg" width="100%" alt="ScholarOS 项目详情"></a><br><sub>详情</sub></td>
   </tr>
 </table>
 
@@ -56,9 +62,9 @@ ScholarOS 是科研辅助工具，不是自动论文作者，也不应被用于�
 - 支持综合主题、自然语言、标题、作者、DOI 和期刊/会议检索；作者条件可叠加机构、主题和会议。
 - 上传参考资料的项目和引导式项目在外发检索词前等待确认，并单独报告每个论文源的失败原因。
 - 对初稿和修订稿执行 9 类确定性质量检查：章节结构、证据、引用、方法要素、图设计、表设计、结果来源、研究者责任声明和正文完整度。
-- 可选逐步确认；中断后从断点继续，或只重做指定阶段及其后续步骤，保留上游成果。重做前自动保存历史快照。
-- 在同一项目保存贡献方向和图件取舍，接收返修意见；影响下游的变化会将旧制品标为待更新，继续运行后再替换。
-- 生成 Markdown、DOCX、LaTeX 可编辑稿、哈希清单和本地 ZIP；没有真实 PDF 时明确列为缺失，也不会自动投稿或发布。
+- 默认逐步确认；运行中可中断并从断点继续，每个阶段完成后以及最终完成时都会自动保存项目版本。
+- 在同一项目保存可直接修改的贡献方案、证据文件、图表规划、阶段确认修改和版本时间线；影响下游的变化会将旧制品标为待更新，继续运行后再替换。
+- 生成 Markdown、基于本地英文 IEEEtran 期刊模板的 LaTeX 可编辑稿、哈希清单和本地 ZIP；Markdown 可在项目页按纸张样式预览并打印为 PDF，也不会自动投稿或发布。
 
 ## 快速开始
 
@@ -110,10 +116,11 @@ scholaros run "如何评估科研智能体的引用可靠性？" --offline
 
 ### 一步步推进研究
 
-终端菜单选择 `g`，或在 Web 新建项目时勾选引导模式。系统会在范围界定、证据综合、方法设计和初稿完成后停下，等你检查；外发检索词另行确认。
+终端和 Web 默认使用逐步交互模式：系统在每个阶段完成后停下，等你检查；你可以保存修改并重跑当前阶段，再确认进入下一阶段。只有明确选择“一步完成”或使用 `--automatic` 时才连续执行。外发检索词仍另行确认。
 
 ```bash
-scholaros run "如何评估科研智能体的引用可靠性？" --guided
+scholaros run "如何评估科研智能体的引用可靠性？"          # 默认逐步交互
+scholaros run "如何评估科研智能体的引用可靠性？" --automatic  # 一步完成
 scholaros show PROJECT_ID
 scholaros approve PROJECT_ID                       # 确认当前阶段
 scholaros confirm-search PROJECT_ID                # 确认外发检索词
@@ -123,7 +130,7 @@ scholaros history PROJECT_ID
 scholaros delivery PROJECT_ID                      # 生成可编辑格式与本地交付包
 ```
 
-这些是分别使用的操作，请按项目当前状态选择。不加 `--guided` 仍按原来的自动流程运行。当前支持阶段级检查和重做，尚不支持逐章对话编辑。完整操作和历史存储边界见[分步研究与恢复](./docs/zh-CN/workflow.md)。
+这些是分别使用的操作，请按项目当前状态选择。默认按阶段交互；只有 `--automatic` 才采用一步完成模式。当前支持阶段级检查和重做，尚不支持逐章对话编辑。完整操作和历史存储边界见[分步研究与恢复](./docs/zh-CN/workflow.md)。
 
 ### 4. 不激活环境时启动
 
@@ -175,7 +182,7 @@ scholaros search "10.1145/1234567" --field doi --source acm
 scholaros serve
 ```
 
-浏览器打开 `http://127.0.0.1:8000`，API 文档位于 `/docs`。Web 工作台支持完整任务配置、上传资料、贡献选择、确认外发检索计划、查看阶段状态、图件故事板、同任务返修、交付打包、下载制品和安全重跑/删除项目。详见[项目工作台与交付](./docs/zh-CN/workbench.md)。
+浏览器打开 `http://127.0.0.1:8000`，API 文档位于 `/docs`。Web 工作台支持完整任务配置、上传资料、直接修改研究贡献方案、确认外发检索计划、分阶段保存并确认修改、逐条查看证据与图表规划、预览 Markdown/LaTeX 原文、查看质量问题、中断/断点继续、版本时间线、只读历史项目视图和项目删除。详见[项目工作台与交付](./docs/zh-CN/workbench.md)。
 
 ## 项目数据与输出
 

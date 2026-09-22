@@ -25,10 +25,13 @@ GENERATED_ARTIFACTS = frozenset(
         "papers.json",
         "learning-plan.json",
         "contribution-options.json",
+        "contribution-blueprint.json",
         "evidence.json",
         "research-design.json",
         "figure-story.json",
+        "table-story.json",
         "paper-draft.md",
+        "paper-draft.tex",
         "review.json",
         "paper.md",
         "final-review.json",
@@ -274,8 +277,15 @@ class ProjectStore:
             temporary.unlink(missing_ok=True)
         return path
 
-    def snapshot_project(self, project: Project, reason: str) -> str:
-        """在失效或重跑前保留状态与生成制品；历史不包含密钥或配置环境。"""
+    def snapshot_project(
+        self,
+        project: Project,
+        reason: str,
+        *,
+        stage: str | None = None,
+        kind: str = "change",
+    ) -> str:
+        """保留项目状态与生成制品；历史不包含密钥或配置环境。"""
         self._validate_project_id(project.id)
         root = self.settings.artifacts_path / project.id / "history"
         root.mkdir(parents=True, exist_ok=True)
@@ -294,6 +304,8 @@ class ProjectStore:
                 "revision": revision,
                 "created_at": utc_now(),
                 "reason": reason,
+                "stage": stage,
+                "kind": kind,
                 "project": project.to_dict(),
                 "artifacts": hashes,
             }
@@ -314,11 +326,31 @@ class ProjectStore:
             for path in root.glob("*/manifest.json"):
                 if not re.fullmatch(r"[a-f0-9]{32}", path.parent.name):
                     continue
-                value = json.loads(path.read_text(encoding="utf-8"))
-                entries.append({key: value[key] for key in (
-                    "revision", "created_at", "reason", "artifacts"
-                )})
+                try:
+                    value = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    logger.warning("项目 %s 的历史清单存在损坏条目，已跳过：%s", project_id, path.parent.name)
+                    continue
+                project = value.get("project", {})
+                entries.append(
+                    {
+                        "revision": value["revision"],
+                        "created_at": value["created_at"],
+                        "reason": value["reason"],
+                        "stage": value.get("stage"),
+                        "kind": value.get("kind", "change"),
+                        "status": project.get("status"),
+                        "title": project.get("title") or project.get("idea"),
+                        "artifacts": value.get("artifacts", {}),
+                    }
+                )
         return sorted(entries, key=lambda value: value["created_at"], reverse=True)
+
+    def history_manifest(self, project_id: str, revision: str) -> dict[str, Any] | None:
+        path = self.history_artifact_path(project_id, revision, "manifest.json")
+        if path is None:
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
 
     def history_artifact_path(self, project_id: str, revision: str, name: str) -> Path | None:
         if not self._is_project_id(project_id) or not re.fullmatch(r"[a-f0-9]{32}", revision):

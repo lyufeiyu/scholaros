@@ -16,8 +16,9 @@ REQUESTED_SCOPES = frozenset({"manuscript", "local_delivery", "submission_packag
 AUTHOR_VOICE_MODES = frozenset({"off", "standard", "strict"})
 REFERENCE_COUNT_MODES = frozenset({"venue_average", "custom"})
 MECHANISM_FIGURE_MODES = frozenset({"prefer", "auto", "omit"})
-DELIVERY_FORMATS = frozenset({"md", "docx", "tex", "pdf"})
-DECISION_TYPES = frozenset({"contribution", "figure"})
+DELIVERY_FORMATS = frozenset({"md", "tex"})
+LEGACY_DELIVERY_FORMATS = frozenset({"docx", "pdf"})
+DECISION_TYPES = frozenset({"figure"})
 FIGURE_DECISIONS = frozenset({"keep", "revise", "omit"})
 
 DEFAULT_CONFIGURATION: dict[str, Any] = {
@@ -33,7 +34,7 @@ DEFAULT_CONFIGURATION: dict[str, Any] = {
     "reference_count_mode": "venue_average",
     "reference_count": None,
     "mechanism_figure": "prefer",
-    "formats": ["md", "docx", "tex", "pdf"],
+    "formats": ["md", "tex"],
 }
 
 SCOPING_CONFIGURATION_FIELDS = frozenset(
@@ -43,7 +44,7 @@ SEARCH_CONFIGURATION_FIELDS = frozenset(
     {"same_field_papers", "target_venue_papers", "reference_count_mode", "reference_count"}
 )
 DESIGN_CONFIGURATION_FIELDS = frozenset({"mechanism_figure"})
-DRAFT_CONFIGURATION_FIELDS = frozenset({"output_language", "author_voice"})
+DRAFT_CONFIGURATION_FIELDS = frozenset({"output_language", "author_voice", "formats"})
 
 
 def normalize_configuration(value: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -86,9 +87,14 @@ def normalize_configuration(value: Mapping[str, Any] | None = None) -> dict[str,
     if not isinstance(formats, Sequence) or isinstance(formats, (str, bytes)):
         raise ValueError("formats 必须是格式名称数组")
     normalized_formats = list(dict.fromkeys(str(item).strip().lower() for item in formats))
-    if not normalized_formats or set(normalized_formats) - DELIVERY_FORMATS:
-        raise ValueError("formats 只能包含 md、docx、tex、pdf，且至少选择一种")
-    config["formats"] = normalized_formats
+    if not normalized_formats:
+        raise ValueError("formats 至少选择 md 或 tex 中的一种")
+    unknown_formats = set(normalized_formats) - DELIVERY_FORMATS - LEGACY_DELIVERY_FORMATS
+    if unknown_formats:
+        raise ValueError("formats 只能包含 md、tex，且至少选择一种")
+    # 旧项目可能保存过 docx/pdf；读取时平滑迁移，但所有新入口只接受 Markdown/LaTeX。
+    # 当前工作台固定同时保留 Markdown 与 LaTeX；旧项目中的单格式或历史格式在读取时迁移。
+    config["formats"] = list(DEFAULT_CONFIGURATION["formats"])
     return config
 
 
@@ -144,40 +150,50 @@ def build_learning_plan(config: Mapping[str, Any], spec: ResearchSpec) -> dict[s
     }
 
 
-def build_contribution_options(spec: ResearchSpec) -> list[dict[str, str]]:
-    """给出有边界的方向选择，不声称已经得到研究结果。"""
+def build_contribution_blueprint(spec: ResearchSpec) -> dict[str, Any]:
+    """形成一份可直接修改的贡献蓝图，不再要求从候选方向中选择。"""
 
-    return [
-        {
-            "id": "primary",
-            "title": "核心研究贡献",
-            "summary": spec.contribution,
-            "tradeoff": "最贴近当前研究问题，仍需由真实结果验证。",
-        },
-        {
-            "id": "validation",
-            "title": "验证与适用边界",
-            "summary": "系统检验当前研究问题在不同条件下的有效性、稳健性与失败边界。",
-            "tradeoff": "结论更审慎，需要更完整的对照、敏感性分析与反例。",
-        },
-        {
-            "id": "methodology",
-            "title": "方法与可复现性",
-            "summary": "把研究流程、证据约束和分析步骤操作化为可复核、可复现的方法框架。",
-            "tradeoff": "方法贡献更强，但不能代替对核心科学问题的实证回答。",
-        },
-    ]
+    return {
+        "research_question": spec.question,
+        "intended_contribution": spec.contribution,
+        "boundaries": [
+            "所有核心结论仍需由真实结果、对照与敏感性分析验证。",
+            "明确区分已观察事实、已有知识与仍待验证的解释路径。",
+            "主动报告失败条件、适用范围和无法由当前材料支持的主张。",
+        ],
+        "framework": [
+            "把研究问题拆成可证伪假设、主要指标与对照条件。",
+            "以证据账本约束每个背景判断和方法选择。",
+            "按研究设计、真实结果、稳健性检查和局限性组织论证。",
+        ],
+    }
 
 
 def build_figure_story(
-    config: Mapping[str, Any], *, has_results: bool
+    config: Mapping[str, Any], *, has_results: bool, design: Mapping[str, Any] | None = None
 ) -> list[dict[str, Any]]:
     value = normalize_configuration(config)
+    design = dict(design or {})
+    question = str(design.get("research_question") or "已确认的研究问题")
+    hypotheses = [str(item) for item in design.get("hypotheses", [])[:3]]
+    baselines = [str(item) for item in design.get("baselines", [])[:3]]
     figures: list[dict[str, Any]] = [
         {
             "id": "figure-1",
             "title": "研究逻辑与证据链",
             "job": "解释研究问题、证据、方法与可证伪结论之间的关系。",
+            "composition": [
+                f"研究问题：{question}",
+                "左侧为证据来源与纳入边界，中部为研究步骤，右侧为可证伪结论与失败条件。",
+                *([f"假设节点：{item}" for item in hypotheses] or ["假设节点：待按研究问题确认。"]),
+            ],
+            "visual_encoding": [
+                "实线表示有证据支持的流程，虚线表示待验证推断。",
+                "颜色只区分证据、方法、结果三类，不编码未经验证的强弱关系。",
+            ],
+            "data_requirements": "使用研究规格、证据账本和方法设计即可绘制，不需要伪造实验数值。",
+            "caption": "图 1. 从研究问题到证据、方法与可证伪结论的整体研究框架。",
+            "boundary": "图中不得把计划中的分析或假设标成已观察结果。",
             "kind": "framework",
             "status": "planned",
             "media": None,
@@ -188,6 +204,21 @@ def build_figure_story(
             "id": "figure-2",
             "title": "主要发现与对照",
             "job": "展示主要指标、对照、区间和关键稳健性结果。",
+            "composition": [
+                "主面板呈现主要指标及置信区间；副面板呈现敏感性分析与失败案例。",
+                *([f"对照：{item}" for item in baselines] or ["对照：待在真实结果中确认。"]),
+            ],
+            "visual_encoding": [
+                "点或柱表示估计值，误差线表示区间；不同对照保持统一颜色映射。",
+                "缺失或尚未完成的结果明确标为待补，不使用示意数值。",
+            ],
+            "data_requirements": (
+                "从上传的真实结果材料提取主要指标、区间和稳健性结果。"
+                if has_results
+                else "等待真实结果材料；当前仅保留版式、字段和图注规划。"
+            ),
+            "caption": "图 2. 主要结果、对照与稳健性分析（数值以最终核验结果为准）。",
+            "boundary": "没有真实结果时不得绘制数值型结果图。",
             "kind": "results",
             "status": "planned" if has_results else "waiting_for_results",
             "media": None,
@@ -201,6 +232,17 @@ def build_figure_story(
                 "id": "figure-3",
                 "title": "机制、方法或系统架构",
                 "job": "区分已观察事实、已有知识与仍待验证的解释路径。",
+                "composition": [
+                    "按输入、处理模块、输出和验证反馈四层组织机制或系统组件。",
+                    "每个组件标注输入输出、关键假设及其证据来源。",
+                ],
+                "visual_encoding": [
+                    "模块使用统一矩形节点，数据流使用箭头，反馈或迭代使用回环箭头。",
+                    "待验证机制使用虚线边框，并在图例中单独说明。",
+                ],
+                "data_requirements": "以研究设计中的变量、分析步骤和失败条件为准。",
+                "caption": "图 3. 方法、机制或系统架构及其验证接口。",
+                "boundary": "架构关系是研究设计，不代表机制已经得到因果验证。",
                 "kind": "mechanism",
                 "status": "planned",
                 "media": None,
@@ -209,6 +251,55 @@ def build_figure_story(
             }
         )
     return figures
+
+
+def build_table_story(
+    config: Mapping[str, Any], *, has_results: bool, design: Mapping[str, Any] | None = None
+) -> list[dict[str, Any]]:
+    """规划可直接交给研究者填充的表格，不生成虚构结果。"""
+
+    normalize_configuration(config)
+    design = dict(design or {})
+    variables = [
+        *[str(item) for item in design.get("independent_variables", [])[:3]],
+        *[str(item) for item in design.get("dependent_variables", [])[:3]],
+    ]
+    tables = [
+        {
+            "id": "table-1",
+            "title": "证据纳入与可追踪性清单",
+            "purpose": "逐条连接研究主张、论文或本地材料、证据定位与核验状态。",
+            "columns": ["主张/问题", "来源", "证据摘要", "定位链接或文件", "限制", "人工核验状态"],
+            "rows": "每条证据账本记录一行；同一主张由多条证据支持时分行记录。",
+            "data_requirements": "来自 evidence.json、papers.json 与上传材料清单。",
+            "caption": "表 1. 研究主张与证据来源的可追踪性矩阵。",
+            "boundary": "摘要级证据不得标为已完成全文核验。",
+        },
+        {
+            "id": "table-2",
+            "title": "变量、指标与分析计划",
+            "purpose": "把研究变量、主要指标、对照、统计分析与失败条件放在同一核验表中。",
+            "columns": ["变量/指标", "操作定义", "数据来源", "对照", "分析方法", "失败或停止条件"],
+            "rows": variables or ["按研究设计逐项填写变量与指标，不预填虚构数值。"],
+            "data_requirements": "来自 research-design.json；执行研究后补充最终数据定位。",
+            "caption": "表 2. 变量、主要指标与预先规定的分析方案。",
+            "boundary": "计划与完成结果必须分栏记录，不能用预期结果替代观测结果。",
+        },
+    ]
+    if has_results:
+        tables.append(
+            {
+                "id": "table-3",
+                "title": "主要结果与稳健性检查",
+                "purpose": "汇总真实结果、区间、对照差异、敏感性分析和异常情况。",
+                "columns": ["分析", "样本/切分", "估计值", "区间", "对照", "稳健性", "材料定位"],
+                "rows": "只从 results 角色材料中提取；无法定位的字段保留为空并标记待核验。",
+                "data_requirements": "来自用户上传的真实结果文件。",
+                "caption": "表 3. 主要结果、对照与稳健性检查汇总。",
+                "boundary": "禁止推算、补齐或编造上传材料中不存在的结果。",
+            }
+        )
+    return tables
 
 
 def record_decision(
@@ -220,7 +311,7 @@ def record_decision(
     comment: str = "",
 ) -> list[dict[str, Any]]:
     if decision_type not in DECISION_TYPES:
-        raise ValueError("decision_type 只能是 contribution 或 figure")
+        raise ValueError("decision_type 只能是 figure")
     clean_item = item_id.strip()
     clean_value = value.strip()
     if not clean_item or len(clean_item) > 100:
@@ -236,13 +327,7 @@ def record_decision(
     result = [
         item
         for item in result
-        if not (
-            item.get("type") == decision_type
-            and (
-                item.get("item_id") == clean_item
-                or decision_type == "contribution"
-            )
-        )
+        if not (item.get("type") == decision_type and item.get("item_id") == clean_item)
     ]
     result.append(
         {

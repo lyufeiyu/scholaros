@@ -1134,6 +1134,23 @@ class PaperSearchService:
         """返回获准进入 AI 写作链路的来源；受限源仅用于独立检索。"""
         return [name for name in self.sources if name not in self.workflow_blocked_sources]
 
+    def merge_papers(
+        self,
+        query: str,
+        papers: Sequence[Paper],
+        limit: int,
+        *,
+        require_match: bool = False,
+    ) -> list[Paper]:
+        """统一清洗、去重并排序固定来源与模型补充候选。"""
+
+        values = (
+            [paper for paper in papers if _paper_matches_query(query, paper, SearchField.ALL)]
+            if require_match
+            else list(papers)
+        )
+        return self._rank_and_deduplicate(query, values, SearchField.ALL)[:limit]
+
     async def search(
         self,
         query: str,
@@ -1354,19 +1371,37 @@ class PaperSearchService:
         query: str, papers: list[Paper], field: SearchField = SearchField.ALL
     ) -> list[Paper]:
         query_tokens = _significant_tokens(query)
-        deduplicated: dict[str, Paper] = {}
+        deduplicated: list[Paper] = []
+        by_doi: dict[str, Paper] = {}
+        by_title: dict[str, Paper] = {}
         for paper in papers:
             paper.authors = _clean_author_names(paper.authors)
-            key = _paper_dedup_key(paper)
-            if key is None:
+            paper.landing_url = normalize_http_url(paper.landing_url)
+            paper.pdf_url = normalize_http_url(paper.pdf_url)
+            normalized_doi = _valid_normalized_doi(paper.doi)
+            normalized_title = _normalize_match_text(paper.title)
+            if not normalized_doi and not normalized_title:
                 continue
-            current = deduplicated.get(key)
+            current = by_doi.get(normalized_doi.casefold()) if normalized_doi else None
+            title_match = by_title.get(normalized_title) if normalized_title else None
+            if current is None and title_match is not None:
+                title_match_doi = _valid_normalized_doi(title_match.doi)
+                if not normalized_doi or not title_match_doi:
+                    current = title_match
             if current is None:
-                deduplicated[key] = paper
-                continue
-            _merge_paper(current, paper)
+                current = paper
+                deduplicated.append(current)
+            else:
+                _merge_paper(current, paper)
+            merged_doi = _valid_normalized_doi(current.doi)
+            if merged_doi:
+                by_doi[merged_doi.casefold()] = current
+            if normalized_doi:
+                by_doi[normalized_doi.casefold()] = current
+            if normalized_title:
+                by_title.setdefault(normalized_title, current)
 
-        for paper in deduplicated.values():
+        for paper in deduplicated:
             field_tokens = _significant_tokens(_paper_field_text(paper, field))
             abstract_tokens = _significant_tokens(paper.abstract)
             field_overlap = len(query_tokens & field_tokens) / max(1, len(query_tokens))
@@ -1386,7 +1421,7 @@ class PaperSearchService:
                 4,
             )
             paper.cite_key = _cite_key(paper)
-        return sorted(deduplicated.values(), key=lambda paper: paper.score, reverse=True)
+        return sorted(deduplicated, key=lambda paper: paper.score, reverse=True)
 
 
 def _paper_dedup_key(paper: Paper) -> str | None:
@@ -1400,14 +1435,35 @@ def _paper_dedup_key(paper: Paper) -> str | None:
 
 
 def _merge_paper(current: Paper, paper: Paper) -> None:
+    current_is_model_only = bool(current.sources) and set(current.sources) <= {"llm_discovery"}
+    incoming_is_model_only = bool(paper.sources) and set(paper.sources) <= {"llm_discovery"}
     current.sources = sorted(set(current.sources + paper.sources))
     current.authors = _clean_author_names(current.authors)
     incoming_authors = _clean_author_names(paper.authors)
-    if not current.authors and incoming_authors:
+    if current_is_model_only and not incoming_is_model_only:
+        current.title = paper.title or current.title
+        current.authors = incoming_authors or current.authors
+        current.year = paper.year or current.year
+        current.venue = paper.venue or current.venue
+        current.external_id = paper.external_id or current.external_id
+        current.doi = paper.doi or current.doi
+    elif not current.authors and incoming_authors:
         current.authors = incoming_authors
-    current.abstract = max((current.abstract, paper.abstract), key=len)
-    current.pdf_url = current.pdf_url or paper.pdf_url
-    current.landing_url = current.landing_url or paper.landing_url
+    if current_is_model_only and not incoming_is_model_only:
+        current.abstract = paper.abstract or current.abstract
+    elif not current_is_model_only and incoming_is_model_only:
+        current.abstract = current.abstract or paper.abstract
+    else:
+        current.abstract = max((current.abstract, paper.abstract), key=len)
+    current.doi = current.doi or paper.doi
+    current.venue = current.venue or paper.venue
+    current.year = current.year or paper.year
+    if current_is_model_only and not incoming_is_model_only:
+        current.pdf_url = paper.pdf_url or current.pdf_url
+        current.landing_url = paper.landing_url or current.landing_url
+    else:
+        current.pdf_url = current.pdf_url or paper.pdf_url
+        current.landing_url = current.landing_url or paper.landing_url
     current.is_open_access = current.is_open_access or paper.is_open_access
     current.citation_count = max(current.citation_count or 0, paper.citation_count or 0)
     current.score = max(current.score, paper.score)

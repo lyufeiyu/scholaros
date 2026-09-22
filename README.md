@@ -6,11 +6,12 @@ A research assistant workspace for traceable evidence, method design, and writin
 
 **English** | [简体中文](./README.zh-CN.md)
 
+[![Version](https://img.shields.io/badge/version-0.3.0-456B93)](./pyproject.toml)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](./LICENSE)
 [![Checks](https://img.shields.io/badge/checks-run_locally-586069)](./scripts/check.sh)
 
-[Quick start](#quick-start) · [Features](#features) · [Search](#search) · [Architecture](#architecture-overview) · [Documentation](#documentation) · [Contributing](./CONTRIBUTING.md)
+[Quick start](#quick-start) · [News](#news) · [Features](#features) · [Search](#search) · [Architecture](#architecture-overview) · [Documentation](#documentation) · [Contributing](./CONTRIBUTING.md)
 
 </div>
 
@@ -22,19 +23,24 @@ Question → Scope → Search → Evidence → Design → Draft → Review → R
 
 The terminal CLI and Web workspace share the same workflow. ScholarOS produces candidate research designs, evidence records, and research drafts; final judgment and academic responsibility remain with the researcher. When no experimental data is supplied, it produces a research protocol and figure/table design notes rather than invented results.
 
+## 📰 News
+
+### September 22, 2026 · v0.3.0 — Interactive research workspace
+
+- Stage-by-stage interaction is now the default for Web, CLI, and terminal entry points; use `--automatic` when you explicitly want one-step execution.
+- Running projects can be interrupted and resumed from the saved checkpoint.
+- Every completed stage and the final workflow are saved to a project version timeline; historical versions can be opened directly in the current project view as read-only snapshots.
+- Figure plans render Mermaid flowcharts and table plans render as readable tables.
+- The Web workspace uses a calm blue-gray visual theme and a simplified project/material overview; API documentation remains available at `/docs`.
+- LaTeX output uses the local English IEEEtran journal template stored under `templates/ieee/`.
+
 ## Screenshots
 
 <table>
   <tr>
-    <td colspan="2" width="33.33%" align="center"><a href="./images/research-workspace-overview.jpg"><img src="./images/research-workspace-overview.jpg" width="100%" height="170" alt="Research workspace overview"></a><br><sub>Research Workspace Overview</sub></td>
-    <td colspan="2" width="33.33%" align="center"><a href="./images/research-project-workflow.jpg"><img src="./images/research-project-workflow.jpg" width="100%" height="170" alt="Research project workflow"></a><br><sub>Research Project Workflow</sub></td>
-    <td colspan="2" width="33.33%" align="center"><a href="./images/cross-source-paper-search.jpg"><img src="./images/cross-source-paper-search.jpg" width="100%" height="170" alt="Cross-source paper search"></a><br><sub>Cross-source Paper Search</sub></td>
-  </tr>
-  <tr>
-    <td width="16.67%"></td>
-    <td colspan="2" width="33.33%" align="center"><a href="./images/terminal-workspace.jpg"><img src="./images/terminal-workspace.jpg" width="100%" height="170" alt="Terminal workspace"></a><br><sub>Terminal Workspace</sub></td>
-    <td colspan="2" width="33.33%" align="center"><a href="./images/terminal-web-server.jpg"><img src="./images/terminal-web-server.jpg" width="100%" height="170" alt="Terminal web server"></a><br><sub>Terminal Web Server</sub></td>
-    <td width="16.67%"></td>
+    <td width="33.33%" align="center"><a href="./images/ScholarOSv0.3.0-home.jpg"><img src="./images/ScholarOSv0.3.0-home.jpg" width="100%" alt="ScholarOS home workspace"></a><br><sub>Home</sub></td>
+    <td width="33.33%" align="center"><a href="./images/ScholarOSv0.3.0-project.jpg"><img src="./images/ScholarOSv0.3.0-project.jpg" width="100%" alt="ScholarOS project workspace"></a><br><sub>Project</sub></td>
+    <td width="33.33%" align="center"><a href="./images/ScholarOSv0.3.0-detail.jpg"><img src="./images/ScholarOSv0.3.0-detail.jpg" width="100%" alt="ScholarOS project detail"></a><br><sub>Detail</sub></td>
   </tr>
 </table>
 
@@ -56,9 +62,9 @@ ScholarOS is a research assistance tool, not an autonomous paper author, and mus
 - Supports topic, natural-language, exact title, author, DOI, and venue searches; author searches can combine affiliation, topic, and venue constraints.
 - Shows a search-plan confirmation for projects with uploaded references and for guided projects; reports each source failure separately.
 - Runs nine deterministic checks on both the initial and revised draft: section structure, evidence availability, in-text citations, method elements, figure design, table design, result provenance, researcher-responsibility statement, and draft depth.
-- Offers optional guided checkpoints, resumes interrupted work, and reruns a selected stage without repeating completed upstream work. Saves a history snapshot before reruns.
-- Keeps bounded contribution and figure decisions in the same project, accepts revision feedback without opening a new project, and marks affected downstream artifacts stale until they are regenerated.
-- Prepares editable Markdown, DOCX, and LaTeX outputs plus a hash manifest and local ZIP. PDF remains explicitly missing unless a real PDF artifact exists; delivery never means automatic submission.
+- Uses stage-by-stage checkpoints by default, supports explicit interruption and resume, and automatically saves a version after every completed stage and after final completion.
+- Keeps one editable contribution blueprint, detailed evidence files, figure/table plans, stage-confirmed revisions, and a read-only version timeline in the same project; affected downstream artifacts remain stale until regenerated.
+- Prepares editable Markdown and English IEEEtran LaTeX outputs plus a hash manifest and local ZIP. Markdown can be previewed as a paper and printed to PDF from the project page; local delivery never means automatic submission.
 
 ## Quick start
 
@@ -108,10 +114,11 @@ scholaros run "How can citation reliability in research agents be evaluated?" --
 
 ### Work step by step
 
-Choose `g` in the terminal menu, or enable guided mode when creating a Web project. The workflow pauses after scope, evidence, method design, and the initial draft for your review. Search terms are confirmed separately before being sent to paper sources.
+Terminal and Web projects now use stage-by-stage interaction by default. The workflow pauses after every stage; you can save an edit, rerun the current stage, and approve it before continuing. Choose one-step execution or pass `--automatic` only when you want the remaining stages to run continuously. Search terms are still confirmed separately before being sent to paper sources.
 
 ```bash
-scholaros run "How can citation reliability in research agents be evaluated?" --guided
+scholaros run "How can citation reliability in research agents be evaluated?"             # interactive by default
+scholaros run "How can citation reliability in research agents be evaluated?" --automatic # one-step
 scholaros show PROJECT_ID
 scholaros approve PROJECT_ID                       # approve the pending stage
 scholaros confirm-search PROJECT_ID                # approve outbound search terms
@@ -121,7 +128,7 @@ scholaros history PROJECT_ID
 scholaros delivery PROJECT_ID                      # build editable outputs and a local package
 ```
 
-These are separate actions; use the command for the project's current state. Without `--guided`, the existing automatic flow remains available. This release supports stage-level review and reruns, not conversational editing of each section. See [Guided work and recovery](./docs/workflow.md) for details and history-storage limits.
+These are separate actions; use the command for the project's current state. Stage-by-stage interaction is the default; use `--automatic` for one-step execution. This release supports stage-level review and reruns, not conversational editing of each section. See [Guided work and recovery](./docs/workflow.md) for details and history-storage limits.
 
 ### 4. Start without activating the environment
 
@@ -173,7 +180,7 @@ Results include a landing page, DOI link, and open PDF link when available. Scho
 scholaros serve
 ```
 
-Open `http://127.0.0.1:8000`; API documentation is available at `/docs`. The Web workspace supports full project intake, document upload, contribution choices, outbound search-plan confirmation, stage monitoring, figure storyboards, feedback-driven revision, delivery packaging, artifact download, safe reruns, and project deletion. See [Project workbench and delivery](./docs/workbench.md).
+Open `http://127.0.0.1:8000`; API documentation is available at `/docs`. The Web workspace supports full project intake, document upload, a directly editable contribution blueprint, outbound search-plan confirmation, stage-by-stage confirmed edits, detailed evidence files and figure/table plans, Markdown/LaTeX source preview, quality findings, interruption/resume, automatic version timelines, read-only historical project views, and project deletion. See [Project workbench and delivery](./docs/workbench.md).
 
 ## Project data and output
 

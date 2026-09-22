@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import json
-import urllib.error
-import urllib.request
 from collections.abc import Sequence
 from typing import Any
 from urllib.parse import urlsplit
 
+import httpx
+
+from scholaros import __version__
 from scholaros.config import Settings
 from scholaros.runtime import AgentMessage, ModelTurn, ToolCall
 
@@ -18,10 +17,13 @@ MAX_MODEL_RESPONSE_BYTES = 32 * 1024 * 1024
 class OpenAICompatibleModel:
     """最小 OpenAI-compatible Chat Completions 适配器。"""
 
-    def __init__(self, settings: Settings):
+    def __init__(
+        self, settings: Settings, *, transport: Any | None = None
+    ) -> None:
         if not settings.api_key:
             raise ValueError(f"未设置模型密钥环境变量：{settings.api_key_env}")
         self.settings = settings
+        self._transport = transport
 
     async def turn(
         self, messages: Sequence[AgentMessage], tools: list[dict[str, Any]]
@@ -37,7 +39,12 @@ class OpenAICompatibleModel:
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
-        body = await asyncio.to_thread(self._post, payload)
+        async with httpx.AsyncClient(
+            timeout=self.settings.model_timeout,
+            transport=self._transport,
+            trust_env=False,
+        ) as client:
+            body = await self._post(client, payload)
         choice = _response_message(body)
         raw_calls = choice.get("tool_calls")
         if raw_calls is None:
@@ -78,46 +85,41 @@ class OpenAICompatibleModel:
             reasoning_content=reasoning_content or "",
         )
 
-    def _post(self, payload: dict[str, Any]) -> Any:
+    async def _post(self, client: httpx.AsyncClient, payload: dict[str, Any]) -> Any:
         url = f"{self.settings.api_base}/chat/completions"
-        request = urllib.request.Request(
-            url,
-            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {self.settings.api_key}",
-                "Content-Type": "application/json",
-                "User-Agent": "ScholarOS/0.1",
-            },
-            method="POST",
-        )
+        headers = {
+            "Authorization": f"Bearer {self.settings.api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": f"ScholarOS/{__version__}",
+        }
         try:
-            with urllib.request.urlopen(request, timeout=self.settings.model_timeout) as response:
-                raw = response.read(MAX_MODEL_RESPONSE_BYTES + 1)
-                if len(raw) > MAX_MODEL_RESPONSE_BYTES:
-                    raise RuntimeError("模型服务响应超过 32 MiB 安全上限，已停止读取")
+            async with client.stream("POST", url, json=payload, headers=headers) as response:
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    raise RuntimeError(
+                        f"{_http_error_message(exc.response.status_code)}；"
+                        f"当前模型={self.settings.model}，API Base={_safe_api_base(self.settings.api_base)}，"
+                        f"密钥变量={self.settings.api_key_env}"
+                    ) from None
+                chunks: list[bytes] = []
+                total = 0
+                async for chunk in response.aiter_bytes():
+                    total += len(chunk)
+                    if total > MAX_MODEL_RESPONSE_BYTES:
+                        raise RuntimeError("模型服务响应超过 32 MiB 安全上限，已停止读取")
+                    chunks.append(chunk)
+                raw = b"".join(chunks)
                 try:
                     return json.loads(raw)
                 except json.JSONDecodeError as exc:
                     raise RuntimeError("模型服务返回了无法解析的 JSON 响应") from exc
-        except urllib.error.HTTPError as exc:
-            with contextlib.suppress(OSError):
-                exc.close()
-            raise RuntimeError(
-                f"{_http_error_message(exc.code)}；"
-                f"当前模型={self.settings.model}，API Base={_safe_api_base(self.settings.api_base)}，"
-                f"密钥变量={self.settings.api_key_env}"
-            ) from None
-        except TimeoutError:
+        except httpx.TimeoutException:
             raise RuntimeError(
                 f"模型服务在 {self.settings.model_timeout:g} 秒内未完成响应；"
                 "可稍后重试，或在 .env 调大 SCHOLAROS_MODEL_TIMEOUT_SECONDS"
             ) from None
-        except urllib.error.URLError as exc:
-            if isinstance(exc.reason, TimeoutError):
-                raise RuntimeError(
-                    f"模型服务在 {self.settings.model_timeout:g} 秒内未完成响应；"
-                    "可稍后重试，或在 .env 调大 SCHOLAROS_MODEL_TIMEOUT_SECONDS"
-                ) from None
+        except httpx.RequestError:
             raise RuntimeError(
                 "无法连接模型服务；请检查 SCHOLAROS_API_BASE、DNS、代理和 TLS 配置"
             ) from None

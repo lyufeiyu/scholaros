@@ -112,16 +112,18 @@ def interactive(settings: Settings) -> None:
             f"读取超时 {settings.model_timeout:g} 秒"
         )
     while True:
-        print("\n  1  新建论文项目")
+        print("\n  1  新建论文项目（逐步交互）")
+        print("  a  新建一步完成项目")
         print("  2  搜索论文")
         print("  3  查看已有项目")
         print("  4  删除已有项目")
         print("  5  启动网页工作台")
-        print("  g  新建引导式研究项目")
         print("  q  退出")
-        choice = ui.choose("请选择", {"1", "2", "3", "4", "5", "g", "q"})
+        choice = ui.choose("请选择", {"1", "a", "2", "3", "4", "5", "q"})
         if choice == "1":
             _create_project_wizard(settings, ui)
+        elif choice == "a":
+            _create_project_wizard(settings, ui, guided=False)
         elif choice == "2":
             _search_wizard(settings, ui)
         elif choice == "3":
@@ -130,14 +132,12 @@ def interactive(settings: Settings) -> None:
             _delete_project_wizard(settings, ui)
         elif choice == "5":
             _serve(settings, ui)
-        elif choice == "g":
-            _create_project_wizard(settings, ui, guided=True)
         else:
             print("\n  再见。研究过程已保存在 .scholaros 中。\n")
             return
 
 
-def _create_project_wizard(settings: Settings, ui: TerminalUI, *, guided: bool = False) -> None:
+def _create_project_wizard(settings: Settings, ui: TerminalUI, *, guided: bool = True) -> None:
     ui.title("新建论文项目")
     while True:
         idea = ui.ask("研究想法或核心问题")

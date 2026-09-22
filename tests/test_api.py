@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import time
+
 from fastapi.testclient import TestClient
 
 from scholaros.api import create_app
@@ -7,6 +10,17 @@ from scholaros.domain import Paper, ProjectStatus
 from scholaros.papers import MemorySource, PaperSearchService, SourceHttpError
 from scholaros.workflow import ResearchWorkflow
 from scholaros.writing import ResearchWriter
+
+
+def _wait_for_project_idle(client, project_id):
+    for _ in range(200):
+        response = client.get(f"/api/projects/{project_id}")
+        assert response.status_code == 200
+        project = response.json()
+        if not project["is_active"]:
+            return project
+        time.sleep(0.01)
+    raise AssertionError("测试后台任务未在预期时间内结束")
 
 
 def test_health_and_project_lifecycle(settings) -> None:
@@ -30,7 +44,66 @@ def test_health_and_project_lifecycle(settings) -> None:
         fetched = client.get(f"/api/projects/{project_id}")
         assert fetched.status_code == 200
         assert fetched.json()["status"] == "created"
-        assert client.get("/docs").status_code == 200
+        assert fetched.json()["state"]["guided"] is True
+        docs = client.get("/docs")
+        assert docs.status_code == 200
+        assert "ScholarOS API" in docs.text
+        assert "redoc.standalone.js" in docs.text
+        assert client.get("/openapi.json").json()["tags"][0]["name"] == "系统"
+
+
+def test_running_project_can_be_interrupted_and_resumed_from_api(settings) -> None:
+    class SlowWriter(ResearchWriter):
+        async def scope(self, idea, documents=()):
+            del idea, documents
+            await asyncio.sleep(60)
+
+    workflow = ResearchWorkflow(
+        settings, search=PaperSearchService([]), writer=SlowWriter()
+    )
+    with TestClient(create_app(workflow)) as client:
+        created = client.post(
+            "/api/projects",
+            json={"idea": "验证运行中的研究项目可以被网页按钮中断", "run_now": True},
+        )
+        assert created.status_code == 201
+        project_id = created.json()["id"]
+        for _ in range(100):
+            current = client.get(f"/api/projects/{project_id}").json()
+            if current["is_active"]:
+                break
+            time.sleep(0.01)
+        else:
+            raise AssertionError("项目没有进入运行状态")
+
+        interrupted = client.post(f"/api/projects/{project_id}/interrupt")
+        assert interrupted.status_code == 202
+        stopped = _wait_for_project_idle(client, project_id)
+        assert stopped["status"] == "needs_attention"
+        assert stopped["state"]["interrupted"] is True
+        assert "用户主动" in (stopped["error"] or "")
+        assert client.post(f"/api/projects/{project_id}/interrupt").status_code == 409
+
+
+def test_immediate_interrupt_persists_interrupted_state(settings) -> None:
+    class SlowWriter(ResearchWriter):
+        async def scope(self, idea, documents=()):
+            del idea, documents
+            await asyncio.sleep(60)
+
+    workflow = ResearchWorkflow(settings, search=PaperSearchService([]), writer=SlowWriter())
+    with TestClient(create_app(workflow)) as client:
+        created = client.post(
+            "/api/projects",
+            json={"idea": "验证立即点击中断也会保存项目状态", "run_now": True},
+        )
+        project_id = created.json()["id"]
+        interrupted = client.post(f"/api/projects/{project_id}/interrupt")
+        assert interrupted.status_code == 202
+        stopped = _wait_for_project_idle(client, project_id)
+        assert stopped["status"] == "needs_attention"
+        assert stopped["state"]["interrupted"] is True
+        assert "用户主动" in (stopped["error"] or "")
 
 
 def test_restricted_ieee_source_is_rejected_from_web_workflow(settings) -> None:
@@ -53,23 +126,56 @@ def test_restricted_ieee_source_is_rejected_from_web_workflow(settings) -> None:
     assert "仅支持独立检索" in metadata_response.json()["detail"]
 
 
+def test_guided_stage_edit_api_reruns_current_stage(settings) -> None:
+    workflow = ResearchWorkflow(
+        settings, search=PaperSearchService([]), allow_empty_search=True
+    )
+    with TestClient(create_app(workflow)) as client:
+        created = client.post(
+            "/api/projects",
+            json={"idea": "验证网页阶段修改确认后会自动重跑当前阶段", "guided": True},
+        )
+        assert created.status_code == 201
+        project_id = created.json()["id"]
+        first = _wait_for_project_idle(client, project_id)
+        assert first["state"]["pending_checkpoint"] == "scoping"
+
+        saved = client.put(
+            f"/api/projects/{project_id}/stage-edits/scoping",
+            json={"text": "收紧研究边界并补充失败条件"},
+        )
+        assert saved.status_code == 200
+        confirmed = client.post(f"/api/projects/{project_id}/stage-edits/scoping/confirm")
+        assert confirmed.status_code == 202
+
+        rerun = _wait_for_project_idle(client, project_id)
+        assert rerun["state"]["pending_checkpoint"] == "scoping"
+        assert rerun["stage"] == "searching"
+
 def test_web_assets_and_document_upload(settings) -> None:
     workflow = ResearchWorkflow(settings, search=PaperSearchService([]))
     with TestClient(create_app(workflow)) as client:
         home = client.get("/")
         assert home.status_code == 200
         assert 'id="createForm"' in home.text
-        assert 'id="searchForm"' in home.text
-        assert 'id="naturalLanguageSearch"' in home.text
-        assert 'id="googleScholarLink"' in home.text
-        assert 'id="searchField"' in home.text
-        assert 'id="searchPlan"' in home.text
-        assert 'id="authorFilters"' in home.text
-        assert 'id="authorAffiliation"' in home.text
-        assert 'id="authorTopic"' in home.text
-        assert 'id="authorVenue"' in home.text
-        assert 'data-venue="CVPR"' in home.text
-        assert 'data-venue="NeurIPS"' in home.text
+        assert 'id="workspaceView"' in home.text
+        assert 'id="stageList"' in home.text
+        assert 'id="stageEditText"' in home.text
+        assert 'id="interruptProject"' in home.text
+        assert 'id="sourceStatus"' not in home.text
+        assert 'id="modelBadge"' not in home.text
+        assert "API 文档 ↗" not in home.text
+        assert 'name="executionMode" value="guided" checked' in home.text
+        assert 'name="executionMode" value="automatic"' in home.text
+        assert 'id="rerunStage"' not in home.text
+        assert 'id="rerunStageButton"' not in home.text
+        assert 'id="historyPanel"' in home.text
+        assert 'id="returnCurrentVersion"' in home.text
+        assert 'id="loadHistory"' not in home.text
+        assert "版本时间线" in home.text
+        assert "按需加载" not in home.text
+        assert "https://cdn.jsdelivr.net/npm/mermaid@11.12.1/dist/mermaid.min.js" in home.text
+        assert "Mermaid + 可读表格" in home.text
         assert "从问题收敛、跨源检索、证据账本到方法与草稿辅助" in home.text
         assert "让研究过程" not in home.text
         assert "跨源论文检索</h2>" not in home.text
@@ -81,7 +187,6 @@ def test_web_assets_and_document_upload(settings) -> None:
         assert "async function createProject" in script.text
         assert "async function deleteCurrentProject" in script.text
         assert "async function confirmSearchPlan" in script.text
-        assert "requestSubmit" in script.text
         assert "setSearchBusy" in script.text
         assert 'role="status"' in home.text
         assert "Semantic Scholar" in script.text
@@ -98,6 +203,13 @@ def test_web_assets_and_document_upload(settings) -> None:
         assert "模型已配置 · ${health.model_name}" in script.text
         assert "检索失败，请查看页面中的错误说明。" in script.text
         assert "quality_checks_passed" in script.text
+        assert "function renderMermaidPreview" in script.text
+        assert "function buildTablePreview" in script.text
+        assert "function renderHistoryTimeline" in script.text
+        assert "async function viewHistoryRevision" in script.text
+        assert "function returnToCurrentVersion" in script.text
+        assert "securityLevel: \"strict\"" in script.text
+        assert "shouldRerunGuided" in script.text
         assert "failure.suggestion" in script.text
         assert "可稍后重试" in script.text
         assert "/run?restart=" in script.text
@@ -529,6 +641,168 @@ def test_search_api_rejects_blank_query_and_unavailable_natural_language(setting
     assert blank.status_code == 422
     assert natural.status_code == 422
     assert "未配置可用模型" in natural.json()["detail"]
+
+
+def test_search_api_always_merges_model_discovery_with_fixed_sources(settings) -> None:
+    class SupplementalWriter:
+        model = object()
+
+        async def discover_papers(self, query, venue_sources=()):
+            del query, venue_sources
+            return [
+                Paper(
+                    title="Graph Neural Networks: A Review of Methods and Applications",
+                    authors=["Model Researcher"],
+                    year=2025,
+                    abstract="A complementary survey discovered by the configured model.",
+                    sources=["llm_discovery"],
+                    external_id="llm:graph-review",
+                )
+            ]
+
+    source = MemorySource(
+        [
+            Paper(
+                title="Graph Neural Networks for Scientific Discovery",
+                authors=["Ada Smith"],
+                year=2024,
+                abstract="Graph neural networks support scientific discovery.",
+                sources=["memory"],
+                external_id="fixed:graph-science",
+            )
+        ]
+    )
+    workflow = ResearchWorkflow(
+        settings,
+        search=PaperSearchService([source]),
+        writer=SupplementalWriter(),
+    )
+
+    with TestClient(create_app(workflow)) as client:
+        response = client.post(
+            "/api/search",
+            json={"query": "graph neural networks", "sources": ["memory"]},
+        )
+
+    assert response.status_code == 200
+    sources = {item["sources"][0] for item in response.json()["papers"]}
+    assert {"memory", "llm_discovery"} <= sources
+
+
+def test_search_api_does_not_expand_precise_doi_query_with_model_results(settings) -> None:
+    class SupplementalWriter:
+        model = object()
+        called = False
+
+        async def discover_papers(self, query, venue_sources=()):
+            del query, venue_sources
+            self.called = True
+            return []
+
+    writer = SupplementalWriter()
+    workflow = ResearchWorkflow(
+        settings,
+        search=PaperSearchService([]),
+        writer=writer,
+        allow_empty_search=True,
+    )
+
+    with TestClient(create_app(workflow)) as client:
+        response = client.post(
+            "/api/search",
+            json={"query": "10.1000/example", "field": "doi"},
+        )
+
+    assert response.status_code == 200
+    assert writer.called is False
+
+
+def test_search_api_filters_unrelated_model_result_from_exact_title_query(settings) -> None:
+    class SupplementalWriter:
+        model = object()
+
+        async def discover_papers(self, query, venue_sources=()):
+            del query, venue_sources
+            return [
+                Paper(
+                    title="Unrelated Model Result",
+                    authors=["Model Author"],
+                    year=2026,
+                    abstract="This record does not match the requested title.",
+                    sources=["llm_discovery"],
+                    external_id="llm:unrelated",
+                )
+            ]
+
+    exact_title = "A Fully Specified Exact Research Paper Title"
+    workflow = ResearchWorkflow(
+        settings,
+        search=PaperSearchService(
+            [
+                MemorySource(
+                    [
+                        Paper(
+                            title=exact_title,
+                            authors=["Fixed Author"],
+                            year=2024,
+                            abstract="The exact requested paper.",
+                            sources=["memory"],
+                            external_id="fixed:exact",
+                        )
+                    ]
+                )
+            ]
+        ),
+        writer=SupplementalWriter(),
+    )
+
+    with TestClient(create_app(workflow)) as client:
+        response = client.post(
+            "/api/search", json={"query": exact_title, "sources": ["memory"]}
+        )
+
+    assert response.status_code == 200
+    assert [item["title"] for item in response.json()["papers"]] == [exact_title]
+
+
+def test_natural_language_search_filters_model_results_with_translated_terms(settings) -> None:
+    class SupplementalWriter:
+        model = object()
+
+        async def search_keywords(self, query):
+            del query
+            return ["graph", "neural", "networks", "scientific", "discovery"]
+
+        async def discover_papers(self, query, venue_sources=()):
+            del query, venue_sources
+            return [
+                Paper(
+                    title="Graph Neural Networks for Scientific Discovery",
+                    authors=["Model Author"],
+                    year=2026,
+                    abstract="Graph neural networks support scientific discovery.",
+                    sources=["llm_discovery"],
+                    external_id="llm:translated-match",
+                )
+            ]
+
+    workflow = ResearchWorkflow(
+        settings,
+        search=PaperSearchService([]),
+        writer=SupplementalWriter(),
+        allow_empty_search=True,
+    )
+
+    with TestClient(create_app(workflow)) as client:
+        response = client.post(
+            "/api/search",
+            json={"query": "图神经网络用于科学发现", "natural_language": True},
+        )
+
+    assert response.status_code == 200
+    assert [item["external_id"] for item in response.json()["papers"]] == [
+        "llm:translated-match"
+    ]
 
 
 def test_natural_language_model_network_failure_is_reported_without_server_error(settings) -> None:

@@ -46,7 +46,7 @@ def test_terminal_offline_project_can_complete_without_search_results(
     ])
     monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
 
-    _create_project_wizard(settings, TerminalUI())
+    _create_project_wizard(settings, TerminalUI(), guided=False)
 
     projects = ResearchWorkflow(settings, search=PaperSearchService([])).store.list_projects()
     assert len(projects) == 1

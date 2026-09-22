@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="ScholarOS：面向研究者的证据追踪、方法设计与写作辅助工作台">
   <title>ScholarOS · Research Assistant Workspace</title>
-  <link rel="stylesheet" href="/static/styles.css?v=0.2.1">
+  <link rel="stylesheet" href="/static/styles.css?v=0.3.0">
 </head>
 <body>
   <div class="app-shell">
@@ -19,15 +19,15 @@
             <path d="m16.6 19.3-1.4 1.4"></path>
           </svg>
         </span>
-        <span><strong>ScholarOS <span id="brandVersion" class="brand-version">v0.2.1</span></strong><small>Research Workspace</small></span>
+        <span><strong>ScholarOS <span id="brandVersion" class="brand-version">v0.3.0</span></strong><small>Research Workspace</small></span>
       </a>
 
       <nav class="primary-nav" aria-label="主导航">
         <button class="nav-button is-active" type="button" data-view="projects">
-          <span aria-hidden="true">⌁</span> 研究工作台
+          <span aria-hidden="true">▦</span> 研究工作台
         </button>
-        <button class="nav-button" type="button" data-view="search">
-          <span aria-hidden="true">⌕</span> 跨源论文检索
+        <button id="workspaceNav" class="nav-button" type="button" data-view="workspace">
+          <span aria-hidden="true">◈</span> 当前研究项目
         </button>
       </nav>
 
@@ -41,15 +41,6 @@
         </div>
       </section>
 
-      <section class="sidebar-section source-section">
-        <div class="section-heading"><span>连接状态</span></div>
-        <div id="sourceStatus" class="source-status"></div>
-      </section>
-
-      <div class="sidebar-footer">
-        <div id="modelBadge" class="model-badge"><span></span> 检查模型配置…</div>
-        <a href="/docs" target="_blank" rel="noreferrer">API 文档 ↗</a>
-      </div>
     </aside>
 
     <main class="main-content">
@@ -80,7 +71,11 @@
                 <legend>研究想法或核心问题</legend>
                 <textarea id="idea" name="idea" minlength="8" data-max-length="100000" aria-label="研究想法或核心问题" aria-describedby="ideaLength" required placeholder="可以详细描述研究背景、核心问题、已有方法、创新点和约束条件。"></textarea>
                 <p id="ideaLength" class="form-feedback">0 / 100,000 字符</p>
-                <label class="query-mode-option"><input id="guidedMode" type="checkbox"><span>引导模式：逐步确认范围、证据、方法和初稿</span></label>
+                <fieldset class="execution-mode">
+                  <legend>执行方式</legend>
+                  <label><input type="radio" name="executionMode" value="guided" checked><span><strong>逐步交互（默认）</strong><small>每个阶段完成后停下，可修改、重跑当前阶段或确认进入下一步。</small></span></label>
+                  <label><input type="radio" name="executionMode" value="automatic"><span><strong>一步完成</strong><small>除外发检索确认外，连续执行全部阶段。</small></span></label>
+                </fieldset>
               </fieldset>
             <fieldset class="configuration-fieldset">
               <legend><span>研究任务配置</span><small>现在确认，后续仍可调整并保留历史版本</small></legend>
@@ -154,13 +149,7 @@
                 </label>
                 <label>自定义参考文献数量<input id="referenceCount" type="number" min="1" max="500" placeholder="选择自定义时填写" disabled></label>
               </div>
-              <div class="format-options" aria-label="交付格式">
-                <span>交付格式</span>
-                <label><input type="checkbox" name="deliveryFormats" value="md" checked> Markdown</label>
-                <label><input type="checkbox" name="deliveryFormats" value="docx" checked> Word</label>
-                <label><input type="checkbox" name="deliveryFormats" value="tex" checked> LaTeX</label>
-                <label><input type="checkbox" name="deliveryFormats" value="pdf" checked> PDF</label>
-              </div>
+              <div class="format-options" aria-label="交付格式"><span>交付格式</span><strong>Markdown + LaTeX</strong></div>
             </fieldset>
             </div>
             <div class="source-picker">
@@ -196,6 +185,15 @@
           </form>
         </section>
 
+        </section>
+
+      <section id="workspaceView" class="view">
+        <section id="workspaceEmpty" class="panel workspace-empty">
+          <span class="eyebrow">RESEARCH FLOW</span>
+          <h2>先创建一个研究项目</h2>
+          <p>创建后，范围、材料、证据、稿件、图件和质量检查会集中在项目页面，并可按阶段逐项切换修改。</p>
+          <button id="goToCreateProject" class="primary-button small" type="button">创建研究项目</button>
+        </section>
         <section id="projectWorkspace" class="panel workspace-panel" hidden>
           <div class="workspace-header">
             <div>
@@ -206,49 +204,59 @@
             <div class="workspace-actions">
               <button id="refreshProject" class="secondary-button" type="button">刷新状态</button>
               <button id="deleteProject" class="danger-button" type="button">删除项目</button>
+              <button id="interruptProject" class="danger-button small" type="button" hidden>中断运行</button>
               <button id="runProject" class="primary-button small" type="button">开始运行</button>
               <button id="resumeProject" class="secondary-button" type="button" hidden>从断点继续</button>
-              <button id="approveStage" class="primary-button small" type="button" hidden>确认本阶段并继续</button>
+              <button id="approveStage" class="primary-button small" type="button" hidden>确认结果，进入下一步</button>
             </div>
           </div>
 
-          <details class="advanced-options">
-            <summary>局部重做与历史版本</summary>
-            <p>重做前自动保存快照；只清理选定阶段及其下游，上游资料和结果保持不变。</p>
-            <label for="rerunStage">从哪个阶段重做</label>
-            <select id="rerunStage">
-              <option value="scoping">范围界定（全部重做）</option>
-              <option value="searching">跨源检索</option>
-              <option value="synthesizing">证据综合</option>
-              <option value="designing">方法设计</option>
-              <option value="drafting">研究稿起草</option>
-              <option value="reviewing">质量检查</option>
-              <option value="revising">辅助修订</option>
-            </select>
-            <button id="rerunStageButton" class="secondary-button" type="button">重做所选阶段</button>
-            <button id="loadHistory" class="secondary-button" type="button">查看历史版本</button>
-            <div id="historyList"></div>
+          <details id="historyPanel" class="history-panel">
+            <summary><strong>版本时间线</strong><span>每阶段自动保存 · 点击展开</span></summary>
+            <div class="subpanel-heading">
+              <div><p>每个阶段完成后自动保存；工作流完成时再保存最终版本。</p></div>
+              <button id="returnCurrentVersion" class="secondary-button" type="button" hidden>返回当前版本</button>
+            </div>
+            <div id="historyViewNotice" class="history-view-notice" hidden></div>
+            <div id="historyList" class="history-timeline"><p class="muted">当前还没有已完成的阶段版本。</p></div>
           </details>
 
           <section id="checkpointPanel" class="search-confirmation" hidden>
             <h4>检查本阶段结果</h4>
-            <p>确认后才会继续。需要重新生成时，可在“局部重做与历史版本”中选择当前阶段。</p>
+            <p>当前阶段已完成。先检查下方结果；需要调整时保存修改并重跑当前阶段，没有问题时点击“确认结果，进入下一步”。</p>
             <pre id="checkpointPreview"></pre>
           </section>
 
           <div class="progress-card">
             <div class="progress-copy"><span id="stageText">准备开始</span><strong id="progressPercent">0%</strong></div>
             <div class="progress-track"><span id="progressFill"></span></div>
-            <ol id="stageList" class="stage-list">
-              <li data-stage="scoping"><span>1</span>范围界定</li>
-              <li data-stage="searching"><span>2</span>跨源检索</li>
-              <li data-stage="synthesizing"><span>3</span>证据综合</li>
-              <li data-stage="designing"><span>4</span>方法设计</li>
-              <li data-stage="drafting"><span>5</span>研究稿起草</li>
-              <li data-stage="reviewing"><span>6</span>质量检查</li>
-              <li data-stage="revising"><span>7</span>辅助修订</li>
+            <ol id="stageList" class="stage-list" aria-label="研究阶段">
+              <li data-stage="scoping"><button type="button"><span>1</span>范围与配置</button></li>
+              <li data-stage="searching"><button type="button"><span>2</span>研究材料</button></li>
+              <li data-stage="synthesizing"><button type="button"><span>3</span>证据与学习</button></li>
+              <li data-stage="designing"><button type="button"><span>4</span>方法与图表</button></li>
+              <li data-stage="drafting"><button type="button"><span>5</span>研究稿件</button></li>
+              <li data-stage="reviewing"><button type="button"><span>6</span>质量检查</button></li>
+              <li data-stage="revising"><button type="button"><span>7</span>总览与交付</button></li>
             </ol>
           </div>
+
+          <section class="stage-editor" aria-labelledby="activeStageTitle">
+            <div class="stage-editor-copy">
+              <span class="eyebrow">ACTIVE STAGE</span>
+              <h4 id="activeStageTitle">范围与配置</h4>
+              <p id="activeStageDescription">确认研究边界与任务配置，再生成后续内容。</p>
+            </div>
+            <div class="stage-editor-form">
+              <label for="stageEditText">本阶段修改要求</label>
+              <textarea id="stageEditText" maxlength="12000" placeholder="写下要调整的重点。先保存草稿不会改变现有结果；确认后会重跑当前阶段，并再次停下来供你检查。"></textarea>
+              <div class="stage-editor-actions">
+                <span id="stageEditStatus">尚未保存修改草稿</span>
+                <button id="saveStageEdit" class="secondary-button" type="button">保存修改</button>
+                <button id="confirmStageEdit" class="primary-button small" type="button">应用修改并重跑本阶段</button>
+              </div>
+            </div>
+          </section>
 
           <section id="searchConfirmation" class="search-confirmation" hidden>
             <div>
@@ -265,9 +273,13 @@
           </section>
 
           <div class="workspace-grid v2-workbench-grid">
-            <section id="configurationWorkbench" class="subpanel workbench-section">
+            <section id="configurationWorkbench" class="subpanel workbench-section" data-stage-panel="scoping">
               <div class="subpanel-heading"><h4>项目配置</h4><span>Intake</span></div>
               <div id="configurationSummary" class="configuration-summary"></div>
+              <div id="scopeEditFields" class="scope-edit-fields" hidden>
+                <label>论文题目<input id="stageScopeTitle" maxlength="300" placeholder="范围界定后可修改论文题目"></label>
+                <label>论文搜索关键词 <small>逗号或换行分隔</small><textarea id="stageScopeKeywords" rows="3" maxlength="1200" placeholder="例如：retrieval augmented generation, evidence grounding, scientific writing"></textarea></label>
+              </div>
               <div class="configuration-actions"><button id="copyConfiguration" class="secondary-button" type="button">复制配置摘要</button><button id="toggleConfigurationEditor" class="secondary-button" type="button">修改配置</button></div>
               <form id="projectConfigurationForm" class="project-configuration-form" hidden>
                 <div class="configuration-grid compact-grid">
@@ -284,11 +296,11 @@
                   <label>参考文献目标<select id="projectReferenceCountMode"><option value="venue_average">参考目标样本</option><option value="custom">自定义数量</option></select></label>
                   <label>自定义数量<input id="projectReferenceCount" type="number" min="1" max="500"></label>
                 </div>
-                <div class="format-options"><span>格式</span><label><input type="checkbox" name="projectDeliveryFormats" value="md"> MD</label><label><input type="checkbox" name="projectDeliveryFormats" value="docx"> Word</label><label><input type="checkbox" name="projectDeliveryFormats" value="tex"> TeX</label><label><input type="checkbox" name="projectDeliveryFormats" value="pdf"> PDF</label></div>
-                <button id="saveConfiguration" class="primary-button small" type="submit">保存配置</button>
+                <div class="format-options"><span>格式</span><strong>Markdown + LaTeX（固定保留）</strong></div>
+                <button id="saveConfiguration" class="primary-button small" type="submit">保存修改草稿</button>
               </form>
             </section>
-            <section id="materialsWorkbench" class="subpanel workbench-section">
+            <section id="materialsWorkbench" class="subpanel workbench-section" data-stage-panel="searching">
               <div class="subpanel-heading"><h4>材料清单</h4><span>Local first</span></div>
               <div id="materialInventory" class="material-inventory"><p class="muted">尚未上传材料。</p></div>
               <div class="inline-upload">
@@ -297,115 +309,49 @@
                 <button id="uploadMore" class="secondary-button" type="button">上传所选资料</button>
               </div>
             </section>
-            <section id="contributionWorkbench" class="subpanel workbench-section full-width">
-              <div class="subpanel-heading"><h4>贡献方向</h4><span>Choose with trade-offs</span></div>
-              <div id="contributionOptions" class="choice-card-grid"><p class="muted">范围界定后生成候选。</p></div>
+            <section id="contributionWorkbench" class="subpanel workbench-section" data-stage-panel="scoping">
+              <div class="subpanel-heading"><h4>研究贡献方案</h4><span>Contribution blueprint</span></div>
+              <div id="contributionOptions" class="contribution-brief"><p class="muted">范围界定后显示核心贡献、适用边界与论证框架。</p></div>
             </section>
-            <section id="evidenceWorkbench" class="subpanel workbench-section">
-              <div class="subpanel-heading"><h4>证据与学习计划</h4><span>Evidence</span></div>
-              <div id="evidenceSummary" class="evidence-summary"><p class="muted">检索后显示证据覆盖。</p></div>
+            <section id="evidenceWorkbench" class="subpanel workbench-section" data-stage-panel="synthesizing">
+              <div class="subpanel-heading"><h4>证据与学习计划</h4><span>Evidence files</span></div>
+              <div id="evidenceSummary" class="evidence-ledger"><p class="muted">完成检索后逐条显示学习计划、论文与本地证据文件。</p></div>
             </section>
-            <section id="draftWorkbench" class="subpanel workbench-section">
-              <div class="subpanel-heading"><h4>研究制品</h4><span>Artifacts</span></div>
-              <div id="artifactList" class="artifact-list"><p class="muted">尚未生成制品。</p></div>
+            <section id="draftWorkbench" class="subpanel workbench-section" data-stage-panel="drafting">
+              <div class="subpanel-heading"><h4>研究稿件原文</h4><span>Markdown + LaTeX</span></div>
+              <div id="artifactList" class="artifact-list"><p class="muted">起草后可预览 Markdown 论文版式与 LaTeX 原文本。</p></div>
             </section>
-            <section id="figureWorkbench" class="subpanel workbench-section full-width">
-              <div class="subpanel-heading"><h4>图件故事板</h4><span>Media can be added later</span></div>
-              <div id="figureStory" class="figure-story"><p class="muted">方法设计完成后生成图件职责与占位。</p></div>
+            <section id="figureWorkbench" class="subpanel workbench-section" data-stage-panel="designing">
+              <div class="subpanel-heading"><h4>图表设计说明</h4><span>Mermaid + 可读表格</span></div>
+              <div id="figureStory" class="figure-table-story"><p class="muted">方法设计完成后生成图与表的构成、数据要求、图注和边界。</p></div>
             </section>
-            <section id="reviewWorkbench" class="subpanel workbench-section">
-              <div class="subpanel-heading"><h4>质量与资料</h4><span>Quality checks</span></div>
-              <div id="reviewSummary" class="review-summary"><p class="muted">修订完成后显示质量检查报告。</p></div>
+            <section id="reviewWorkbench" class="subpanel workbench-section" data-stage-panel="reviewing">
+              <div class="subpanel-heading"><h4>质量检查明细</h4><span>Problems + revisions</span></div>
+              <div id="reviewSummary" class="review-summary"><p class="muted">检查后逐项显示问题、严重程度与建议修改点。</p></div>
             </section>
-            <section id="deliveryWorkbench" class="subpanel workbench-section">
-              <div class="subpanel-heading"><h4>交付中心</h4><span>Delivery</span></div>
-              <div id="deliverySummary" class="delivery-summary"><p class="muted">完成稿生成后可准备可验证的本地交付包。</p></div>
-              <button id="prepareDelivery" class="primary-button small" type="button">准备交付包</button>
-            </section>
-            <section class="subpanel workbench-section full-width feedback-workbench">
-              <div class="subpanel-heading"><h4>意见与同任务返修</h4><span>Feedback</span></div>
-              <form id="feedbackForm" class="feedback-form">
-                <select id="feedbackScope" aria-label="反馈范围"><option value="manuscript">稿件</option><option value="figures">图件</option><option value="all">整项工作</option></select>
-                <textarea id="feedbackText" minlength="2" maxlength="32000" placeholder="描述希望修改的内容；返修前会自动保存当前版本。" required></textarea>
-                <button id="submitFeedback" class="primary-button small" type="submit">保存并开始返修</button>
-              </form>
-              <div id="feedbackHistory" class="feedback-history"></div>
+            <section id="projectOverviewWorkbench" class="subpanel workbench-section" data-stage-panel="revising">
+              <div class="subpanel-heading"><h4>项目与材料总览</h4><span>Research overview</span></div>
+              <div id="projectOverview" class="project-overview"><p class="muted">完成各阶段后汇总范围、材料、证据、图表、稿件与检查结果。</p></div>
             </section>
           </div>
 
           <section id="paperPreviewPanel" class="paper-preview-panel" hidden>
             <div class="subpanel-heading">
-              <h4>研究草稿预览</h4>
+              <div><h4 id="previewTitle">研究草稿预览</h4><p id="previewHint">Markdown 将以纸张样式显示，可使用浏览器打印为 PDF。</p></div>
+              <button id="printPreview" class="secondary-button" type="button">打印 / 保存 PDF</button>
               <button id="closePreview" class="icon-button" type="button" aria-label="关闭预览">×</button>
             </div>
-            <pre id="paperPreview"></pre>
+            <article id="paperPreviewDocument" class="paper-preview-document"></article>
+            <details id="paperPreviewSource" class="paper-preview-source" open><summary id="paperPreviewSourceLabel">稿件原文</summary><pre id="paperPreview"></pre></details>
           </section>
         </section>
       </section>
 
-      <section id="searchView" class="view">
-        <div class="search-heading">
-          <span class="eyebrow">DISCOVER WITH TRACEABILITY</span>
-          <p>系统先从勾选来源获取候选，再严格核验作者、完整标题、DOI 或期刊/会议；综合主题按有效词项覆盖率过滤宽泛结果，并按 DOI 或标题去重。</p>
-        </div>
-        <section class="panel search-panel">
-          <form id="searchForm">
-            <label class="field-label" for="searchQuery">标题、关键词或自然语言研究问题（中文、英文均可）</label>
-            <div class="search-field-row">
-              <label for="searchField">检索字段</label>
-              <select id="searchField">
-                <option value="all">综合主题（标题 / 摘要 / 关键词）</option>
-                <option value="title">论文标题</option>
-                <option value="author">作者姓名</option>
-                <option value="doi">DOI</option>
-                <option value="venue">期刊 / 会议</option>
-              </select>
-              <span id="searchFieldHint">按有效词项覆盖率过滤宽泛结果；可启用自然语言理解。</span>
-            </div>
-            <div class="search-box">
-              <input id="searchQuery" minlength="2" required placeholder="例如：如何减少科研智能体生成的错误引用？">
-              <button id="searchButton" class="primary-button" type="submit">搜索论文</button>
-            </div>
-            <div id="authorFilters" class="author-filter-grid" hidden>
-              <label>
-                <span>学校 / 机构（可选）</span>
-                <input id="authorAffiliation" minlength="2" maxlength="200" placeholder="例如：Shenzhen University">
-              </label>
-              <label>
-                <span>主题关键词（可选）</span>
-                <input id="authorTopic" minlength="2" maxlength="200" placeholder="例如：computer vision agents">
-              </label>
-              <label>
-                <span>期刊 / 会议（可选）</span>
-                <input id="authorVenue" minlength="2" maxlength="200" placeholder="例如：CVPR">
-              </label>
-              <p>附加条件按 AND 组合；机构只核对该姓名对应作者，不会误用合作者的学校。</p>
-            </div>
-            <label class="query-mode-option">
-              <input id="naturalLanguageSearch" type="checkbox">
-              <span><strong>自然语言理解</strong><small>勾选后先用已配置模型转换为英文学术检索词；无模型时会明确提示。搜索准确标题或缩写时不要勾选</small></span>
-            </label>
-            <div id="searchSources" class="source-options compact-options"></div>
-            <div class="venue-source-picker">
-              <div class="source-picker-heading">
-                <span class="field-label">AI 顶会来源</span>
-                <small>默认全选，点击只切换来源，不会改写检索框</small>
-              </div>
-              <div id="venueSources" class="source-options" aria-label="选择 AI 顶会来源"></div>
-            </div>
-          </form>
-        </section>
-        <div class="search-feedback-row">
-          <div id="searchFeedback" class="search-feedback muted" role="status" aria-live="polite">输入检索内容后开始搜索。</div>
-          <a id="googleScholarLink" class="scholar-link" href="#" target="_blank" rel="noreferrer noopener" hidden>在 Google Scholar 手动补充检索 ↗</a>
-        </div>
-        <section id="searchPlan" class="search-plan" aria-live="polite" hidden></section>
-        <div id="searchResults" class="search-results"></div>
-      </section>
     </main>
   </div>
 
   <div id="toast" class="toast" role="alert" aria-live="assertive"></div>
-  <script src="/static/app.js?v=0.2.1" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11.12.1/dist/mermaid.min.js" defer></script>
+  <script src="/static/app.js?v=0.3.0" defer></script>
 </body>
 </html>

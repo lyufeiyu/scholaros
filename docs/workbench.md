@@ -2,11 +2,11 @@
 
 **English** | [简体中文](./zh-CN/workbench.md)
 
-ScholarOS 0.2 separates the user workspace from the seven-stage execution cursor. The workspace has eight areas—configuration, materials, contribution, evidence, draft, figures, review, and delivery—while the recoverable state machine remains compatible with older projects.
+ScholarOS presents one focused workspace per stage while keeping the recoverable seven-stage execution cursor compatible with older projects. The left sidebar stays project-level; stage navigation, editing, and outputs remain inside the current project page.
 
 ## Configure the task
 
-Choose one of six work types: build from materials, rewrite an existing manuscript, integrity/evidence audit, independent review, revise from feedback, or transfer to a new venue. Configuration also records the target scene/name, output language, research boundary, author-voice preference, learning-set sizes, reference target, mechanism-figure policy, requested scope, and formats.
+Choose one of six work types: build from materials, rewrite an existing manuscript, integrity/evidence audit, independent review, revise from feedback, or transfer to a new venue. Configuration also records the target scene/name, output language, research boundary, author-voice preference, learning-set sizes, reference target, mechanism-figure policy, and requested scope. Markdown and LaTeX are always retained together.
 
 Configuration is stored in the project JSON. Older projects receive conservative defaults without a database migration. Changing a field invalidates only the earliest affected stage; previous generated work is snapshotted first. Delivery-only changes remove old exports immediately so stale packages are not presented as current.
 
@@ -22,13 +22,13 @@ scholaros run "Your research question" \
   --reference-count 30 --format md --format tex
 ```
 
-## Make bounded decisions
+## Edit stages with confirmation
 
-After scoping, ScholarOS offers three contribution directions with explicit trade-offs. Selecting one updates the same project and invalidates evidence and later outputs when necessary. The figure storyboard gives each planned figure a job, evidence status, media placeholder, keep/revise/omit decision, and comment. Missing image or video assets do not block planning; a results figure remains marked as waiting when no result material exists.
+Each stage accepts a pending edit. Saving the edit does not alter current results; confirming it snapshots the project, invalidates that stage and its downstream outputs, and then reruns them. Scoping shows one contribution blueprint—research question, core contribution, boundaries, and argument framework—rather than three indistinguishable choices. The evidence stage exposes the learning-plan, paper-list, and evidence-ledger files plus every local material and evidence record. The design stage provides detailed figure and table responsibilities, composition, fields, data requirements, captions, and claim boundaries even when final media is not yet available.
 
-## Revise in the same project
+## Review and revise in the same project
 
-Feedback can target the manuscript, figures, or the whole project. ScholarOS snapshots the current version before revision, and every later round starts from the latest completed manuscript. Figure feedback is written to the storyboard as a revision request. With no configured model, unperformed manuscript edits remain `manual_required` instead of being reported as applied. Affected artifacts are regenerated only after the corresponding stage runs.
+The draft stage exposes both Markdown and LaTeX source; the LaTeX export uses the repository's local IEEEtran journal template, with the target journal's latest author instructions still taking precedence. The quality stage lists every finding with severity, the detected problem, and the recommended change. Revision uses the same confirmed stage-edit mechanism instead of a second feedback form. The last stage combines delivery with a project/material overview so scope, files, evidence, figure/table plans, manuscript, and review status can be checked together.
 
 ## Prepare delivery
 
@@ -38,6 +38,6 @@ Use the Web delivery action, the API, or:
 scholaros delivery PROJECT_ID
 ```
 
-The delivery step can create `paper.docx` and `paper.tex` from the reviewed Markdown, then writes `delivery-manifest.json` and `delivery-package.zip`. The manifest lists requested, available, and missing formats; quality/feedback blockers; file sizes; SHA-256 hashes; sharing boundaries; and the fact that local delivery is not submission or publication. `manuscript` and `submission_package` contain only the requested manuscript formats. `local_delivery` also contains evidence, design, figure-story, and internal-review records; those records can include excerpts from uploaded material and must be reviewed before external sharing. The ZIP excludes original uploads, secrets, the database, history, and local paths. PDF is reported as missing unless a real `paper.pdf` exists; ScholarOS does not disguise another file as PDF.
+The delivery step keeps `paper.md`, creates `paper.tex`, and writes `delivery-manifest.json` plus `delivery-package.zip`. The manifest lists requested and available formats, quality blockers, file sizes, SHA-256 hashes, sharing boundaries, and the fact that local delivery is not submission or publication. `manuscript` and `submission_package` contain only the requested manuscript formats. `local_delivery` also contains evidence, design, figure/table plans, and internal-review records; those records can include excerpts from uploaded material and must be reviewed before external sharing. The ZIP excludes original uploads, secrets, the database, history, and local paths. The project page renders Markdown as a paper-style preview that can be printed to PDF and exposes LaTeX source directly.
 
-DOCX and TeX are editable baseline exports, not venue-perfect typesetting. Researchers must add final media, verify the original evidence, apply the current venue template, confirm author/ethics/funding metadata, and make the submission decision.
+Markdown and TeX are editable baseline exports, not venue-perfect typesetting. Researchers must add final media, verify the original evidence, apply the current venue template, confirm author/ethics/funding metadata, and make the submission decision.

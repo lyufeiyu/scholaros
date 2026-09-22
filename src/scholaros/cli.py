@@ -125,7 +125,15 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--results", action="append", type=Path, default=[])
     run.add_argument("--offline", action="store_true", help="不联网检索，生成结构化演示稿")
     run.add_argument("--json", action="store_true", help="以 JSON 输出结果")
-    run.add_argument("--guided", action="store_true", help="在范围、证据、方法和初稿完成后等待确认")
+    execution = run.add_mutually_exclusive_group()
+    execution.add_argument("--guided", dest="guided", action="store_true", help=argparse.SUPPRESS)
+    execution.add_argument(
+        "--automatic",
+        dest="guided",
+        action="store_false",
+        help="一步完成全部阶段；默认按阶段交互确认",
+    )
+    run.set_defaults(guided=True)
     _add_configuration_arguments(run)
 
     for command, help_text in (("resume", "从当前断点继续"), ("approve", "确认引导阶段并继续"),

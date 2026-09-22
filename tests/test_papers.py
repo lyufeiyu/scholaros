@@ -68,6 +68,44 @@ async def test_search_deduplicates_doi_and_merges_sources() -> None:
     assert reversed_result.papers[0].cite_key == result.papers[0].cite_key
 
 
+def test_model_supplement_without_doi_merges_into_fixed_metadata() -> None:
+    fixed = Paper(
+        title="Traceable Research Agents",
+        authors=["Ada Smith"],
+        year=2025,
+        abstract="fixed abstract",
+        sources=["openalex"],
+        external_id="oa:1",
+        doi="10.1000/example",
+    )
+    supplemental = Paper(
+        title="Traceable Research Agents",
+        authors=[],
+        year=2025,
+        abstract="a longer model-discovered abstract",
+        sources=["llm_discovery"],
+        external_id="llm:1",
+    )
+
+    merged = PaperSearchService([]).merge_papers(
+        "traceable research agents", [fixed, supplemental], 10
+    )
+
+    assert len(merged) == 1
+    assert merged[0].doi == "10.1000/example"
+    assert merged[0].sources == ["llm_discovery", "openalex"]
+    assert merged[0].abstract == "fixed abstract"
+
+    reversed_merged = PaperSearchService([]).merge_papers(
+        "traceable research agents", [supplemental, fixed], 10
+    )
+    assert len(reversed_merged) == 1
+    assert reversed_merged[0].doi == "10.1000/example"
+    assert reversed_merged[0].abstract == "fixed abstract"
+    assert reversed_merged[0].authors == ["Ada Smith"]
+    assert reversed_merged[0].external_id == "oa:1"
+
+
 @pytest.mark.asyncio
 async def test_search_many_keeps_separate_related_work_clusters() -> None:
     source = MemorySource(

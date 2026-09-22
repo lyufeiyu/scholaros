@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ScholarOS API 文档</title>
+  <style>
+    :root { color-scheme: light; --ink: #17243a; --soft: #64748b; --line: #d8e0ea; --paper: #f3f6fa; --panel: #ffffff; --accent: #456b93; }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--ink); background: var(--paper); font: 14px/1.6 Inter, ui-sans-serif, system-ui, -apple-system, sans-serif; }
+    .docs-header { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 18px clamp(20px, 5vw, 72px); border-bottom: 1px solid var(--line); background: rgba(255,255,255,.94); backdrop-filter: blur(14px); }
+    .docs-brand { display: flex; align-items: center; gap: 12px; }
+    .docs-mark { display: grid; width: 34px; height: 34px; place-items: center; border: 1px solid #b8c9db; border-radius: 10px; color: #345576; background: #e7eef6; font-weight: 800; }
+    .docs-brand strong { display: block; font-size: 16px; letter-spacing: .01em; }
+    .docs-brand span { display: block; color: var(--soft); font-size: 11px; }
+    .docs-links { display: flex; gap: 14px; color: var(--soft); font-size: 12px; }
+    .docs-links a { color: inherit; text-decoration: none; }
+    .docs-links a:hover { color: var(--accent); }
+    .docs-intro { max-width: 1180px; margin: 0 auto; padding: 34px clamp(20px, 5vw, 72px) 8px; }
+    .docs-intro h1 { margin: 0 0 6px; font-size: clamp(24px, 3vw, 34px); font-weight: 700; letter-spacing: -.03em; }
+    .docs-intro p { max-width: 760px; margin: 0; color: var(--soft); }
+    #redoc-container { max-width: 1440px; margin: 0 auto; }
+    @media (max-width: 720px) { .docs-header { align-items: flex-start; flex-direction: column; gap: 8px; } .docs-links { flex-wrap: wrap; } }
+  </style>
+</head>
+<body>
+  <header class="docs-header">
+    <div class="docs-brand"><span class="docs-mark">▦</span><div><strong>ScholarOS API</strong><span>研究项目、阶段工作流与论文检索</span></div></div>
+    <nav class="docs-links" aria-label="API 文档导航"><a href="/">返回工作台</a><a href="/openapi.json" target="_blank" rel="noreferrer">下载 OpenAPI JSON</a></nav>
+  </header>
+  <section class="docs-intro"><h1>接口文档</h1><p>按系统、项目、工作流、材料与制品、研究检索分组。先查看项目生命周期，再按当前阶段选择运行、确认、重做或交付接口。</p></section>
+  <main id="redoc-container"></main>
+  <script src="https://cdn.jsdelivr.net/npm/redoc@2.4.0/bundles/redoc.standalone.js"></script>
+  <script>
+    Redoc.init("/openapi.json", {
+      scrollYOffset: 76,
+      hideDownloadButton: false,
+      pathInMiddlePanel: true,
+      sortPropsAlphabetically: false,
+      expandResponses: "200,201,202,400,404,409,422",
+      theme: {
+        colors: { primary: { main: "#456b93" }, text: { primary: "#17243a", secondary: "#64748b" }, http: { get: "#3e6e9e", post: "#5a718e", put: "#7a718d", delete: "#9b5c68" } },
+        typography: { fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif", headings: { fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif", fontWeight: "700" }, code: { fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" } },
+        sidebar: { width: "270px", backgroundColor: "#f8fafc" },
+        rightPanel: { backgroundColor: "#17243a" }
+      }
+    }, document.getElementById("redoc-container"));
+  </script>
+</body>
+</html>

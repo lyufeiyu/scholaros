@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import re
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
@@ -24,6 +24,7 @@ class ResearchWriter:
         idea: str,
         documents: Sequence[dict[str, Any]] = (),
         configuration: dict[str, Any] | None = None,
+        instruction: str = "",
     ) -> ResearchSpec:
         fallback = self._fallback_spec(idea)
         if self.model is None:
@@ -36,6 +37,8 @@ class ResearchWriter:
 想法：{idea}
 
 用户确认的工作配置：{configuration_context}
+
+用户已确认的本阶段修改要求：{instruction or '无'}
 
 用户上传的参考资料摘录：
 {source_context or '无上传参考资料。'}
@@ -127,13 +130,13 @@ selection），后续短语可以是资料或用户明确提出的互补方法�
     async def discover_papers(
         self, query: str, venue_sources: Sequence[str] = ()
     ) -> list[Paper]:
-        """固定论文源无结果时，请模型补充发现高置信度的真实论文。"""
+        """请模型补充发现固定论文源可能遗漏的高置信度真实论文。"""
 
         if self.model is None:
             return []
         venues = "、".join(venue_sources) or "不限"
         prompt = f"""
-你是 ScholarOS 的论文发现 Agent。固定论文数据库没有找到结果，请补充查找用户指定的真实论文。
+你是 ScholarOS 的论文发现 Agent。请补充查找固定论文数据库可能遗漏的真实论文。
 如果你的模型具备联网/搜索能力，请先搜索；如果不能联网，只返回你能高置信度确认真实存在的论文，不能猜测。
 用户检索内容：{query}
 允许的 AI 顶会范围：{venues}
@@ -148,7 +151,7 @@ selection），后续短语可以是资料或用户明确提出的互补方法�
             if not isinstance(raw_papers, list):
                 return []
             discovered: list[Paper] = []
-            for index, item in enumerate(raw_papers[:5]):
+            for item in raw_papers[:5]:
                 if not isinstance(item, dict):
                     continue
                 title = _required_string(item.get("title"), "title", max_chars=500)
@@ -187,7 +190,11 @@ selection），后续短语可以是资料或用户明确提出的互补方法�
             return []
 
     async def synthesize(
-        self, spec: ResearchSpec, papers: Sequence[Paper], documents: Sequence[dict[str, Any]]
+        self,
+        spec: ResearchSpec,
+        papers: Sequence[Paper],
+        documents: Sequence[dict[str, Any]],
+        instruction: str = "",
     ) -> list[Evidence]:
         evidence = [
             Evidence(
@@ -196,8 +203,18 @@ selection），后续短语可以是资料或用户明确提出的互补方法�
                 summary=(
                     paper.abstract[:900] or "当前索引仅提供书目信息，需人工阅读原文后补充证据。"
                 ),
-                supports=[f"与研究问题“{spec.question}”相关的背景或方法证据"],
-                caveats=["该条目由元数据/摘要生成，正式投稿前必须回到原文核验。"],
+                supports=[
+                    f"与研究问题“{spec.question}”相关的背景或方法证据",
+                    *([f"按研究者确认的关注点组织：{instruction}"] if instruction else []),
+                ],
+                caveats=[
+                    "该条目由元数据/摘要生成，正式投稿前必须回到原文核验。",
+                    *(
+                        ["该论文由模型补充发现；固定来源字段优先，模型信息只用于补空，仍需人工核验。"]
+                        if "llm_discovery" in paper.sources
+                        else []
+                    ),
+                ],
                 source_locator=paper.landing_url,
             )
             for index, paper in enumerate(papers, start=1)
@@ -215,7 +232,9 @@ selection），后续短语可以是资料或用户明确提出的互补方法�
             )
         return evidence
 
-    async def design(self, spec: ResearchSpec, evidence: Sequence[Evidence]) -> dict[str, Any]:
+    async def design(
+        self, spec: ResearchSpec, evidence: Sequence[Evidence], instruction: str = ""
+    ) -> dict[str, Any]:
         fallback = {
             "research_question": spec.question,
             "hypotheses": spec.hypotheses,
@@ -234,6 +253,8 @@ selection），后续短语可以是资料或用户明确提出的互补方法�
             "ethics": "遵守资料许可；涉及参与者时取得知情同意；去标识化数据；人工核验引用和高风险结论。",
             "falsification": "若主要指标未达到预注册的最小效应标准，或稳健性检验不成立，则核心假设不成立。",
         }
+        if instruction:
+            fallback["study_design"] += f" 研究者确认的修改要求：{instruction}"
         if self.model is None:
             return fallback
         context = "\n".join(
@@ -243,6 +264,7 @@ selection），后续短语可以是资料或用户明确提出的互补方法�
 你是 ScholarOS 的研究方法 Agent。根据研究规格与证据摘要给出可执行、可证伪的研究设计。
 研究规格：{json.dumps(spec.to_dict(), ensure_ascii=False)}
 证据摘要：{context or '暂无；只能提出待验证设计，不能虚构事实。'}
+研究者确认的本阶段修改要求：{instruction or '无'}
 
 只输出 JSON 对象，字段严格为：research_question、hypotheses、study_design、
 independent_variables、dependent_variables、baselines、analysis、ethics、falsification。
@@ -277,6 +299,7 @@ hypotheses、independent_variables、dependent_variables、baselines 必须是�
         design: dict[str, Any],
         documents: Sequence[dict[str, Any]],
         configuration: dict[str, Any] | None = None,
+        instruction: str = "",
     ) -> str:
         if self.model is None:
             return self._offline_paper(spec, papers, evidence, design)
@@ -320,6 +343,7 @@ hypotheses、independent_variables、dependent_variables、baselines 必须是�
 目标约束：{target_instruction}
 作者表达：{voice_instruction}
 研究分析边界：{config.get('research_mode', 'agent_decide')}。
+研究者确认的本阶段修改要求：{instruction or '无'}
 
 研究规格：
 {json.dumps(spec.to_dict(), ensure_ascii=False)}

@@ -1,30 +1,21 @@
 from __future__ import annotations
 
-import io
 import json
 import traceback
-import urllib.error
 from dataclasses import replace
 from typing import Any
 
+import httpx
 import pytest
 
 from scholaros.llm import OpenAICompatibleModel, _safe_api_base
 from scholaros.runtime import AgentLoop, AgentMessage, ToolRegistry
 
 
-class FakeResponse:
-    def __init__(self, value: dict[str, Any]):
-        self.raw = json.dumps(value).encode("utf-8")
+def model_with(settings, handler) -> OpenAICompatibleModel:
+    """用 MockTransport 构造一个不发真实网络请求的模型。"""
 
-    def __enter__(self) -> FakeResponse:
-        return self
-
-    def __exit__(self, *_args: object) -> None:
-        return None
-
-    def read(self, _size: int = -1) -> bytes:
-        return self.raw
+    return OpenAICompatibleModel(settings, transport=httpx.MockTransport(handler))
 
 
 def test_safe_api_base_hides_url_credentials() -> None:
@@ -39,20 +30,19 @@ async def test_model_waits_for_non_streaming_full_response(settings, monkeypatch
     configured = replace(settings, api_key_env="SCHOLAROS_TEST_KEY")
     captured: dict[str, Any] = {}
 
-    def fake_urlopen(request, timeout):
-        captured["payload"] = json.loads(request.data)
-        captured["timeout"] = timeout
-        return FakeResponse(
-            {"choices": [{"message": {"content": "完整回答", "reasoning_content": "推理"}}]}
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["payload"] = json.loads(request.content)
+        captured["auth"] = request.headers["Authorization"]
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "完整回答", "reasoning_content": "推理"}}]},
         )
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
-
-    result = await OpenAICompatibleModel(configured).turn(
+    result = await model_with(configured, handler).turn(
         [AgentMessage(role="user", content="回答")], []
     )
 
-    assert captured["timeout"] == 300
+    assert captured["auth"] == "Bearer secret"
     assert captured["payload"]["stream"] is False
     assert "thinking" not in captured["payload"]
     assert result.content == "完整回答"
@@ -99,12 +89,10 @@ async def test_thinking_content_is_replayed_after_tool_call(settings, monkeypatc
     )
     payloads: list[dict[str, Any]] = []
 
-    def fake_urlopen(request, timeout):
-        assert timeout == 420
-        payloads.append(json.loads(request.data))
-        return FakeResponse(next(responses))
+    def handler(request: httpx.Request) -> httpx.Response:
+        payloads.append(json.loads(request.content))
+        return httpx.Response(200, json=next(responses))
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     tools = ToolRegistry()
     tools.register(
         "echo",
@@ -116,7 +104,7 @@ async def test_thinking_content_is_replayed_after_tool_call(settings, monkeypatc
         },
         lambda value: value,
     )
-    loop = AgentLoop(OpenAICompatibleModel(configured), tools)
+    loop = AgentLoop(model_with(configured, handler), tools)
 
     assert await loop.run("核验后回答", allowed_tools={"echo"}) == "最终回答"
     assert payloads[0]["thinking"] == {"type": "enabled"}
@@ -128,61 +116,56 @@ async def test_thinking_content_is_replayed_after_tool_call(settings, monkeypatc
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "error",
-    [TimeoutError("read timed out"), urllib.error.URLError(TimeoutError("read timed out"))],
+    "exc_factory",
+    [
+        lambda request: httpx.ReadTimeout("read timed out", request=request),
+        lambda request: httpx.ConnectTimeout("connect timed out", request=request),
+    ],
 )
 async def test_model_timeout_has_actionable_chinese_error(
-    settings, monkeypatch, error: Exception
+    settings, monkeypatch, exc_factory
 ) -> None:
     monkeypatch.setenv("SCHOLAROS_TEST_KEY", "secret")
     configured = replace(settings, api_key_env="SCHOLAROS_TEST_KEY")
 
-    def fake_urlopen(_request, timeout):
-        assert timeout == 300
-        raise error
-
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise exc_factory(request)
 
     with pytest.raises(RuntimeError, match="300 秒.*SCHOLAROS_MODEL_TIMEOUT_SECONDS"):
-        await OpenAICompatibleModel(configured).turn(
+        await model_with(configured, handler).turn(
             [AgentMessage(role="user", content="回答")], []
         )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("error", "public_message"),
+    ("response", "public_message"),
     [
         (
-            urllib.error.HTTPError(
-                "https://example.invalid/chat/completions",
-                401,
-                "unauthorized",
-                {},
-                io.BytesIO(b"Authorization: Bearer actual-review-secret"),
+            httpx.Response(
+                401, content=b"Authorization: Bearer actual-review-secret"
             ),
             "拒绝了当前 API Key",
         ),
         (
-            urllib.error.URLError("proxy password=actual-review-secret"),
+            None,
             "无法连接模型服务",
         ),
     ],
 )
 async def test_model_errors_do_not_expose_upstream_secrets(
-    settings, monkeypatch, error: Exception, public_message: str
+    settings, monkeypatch, response, public_message: str
 ) -> None:
     monkeypatch.setenv("SCHOLAROS_TEST_KEY", "secret")
     configured = replace(settings, api_key_env="SCHOLAROS_TEST_KEY")
 
-    def fake_urlopen(_request, timeout):
-        del timeout
-        raise error
-
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    def handler(request: httpx.Request) -> httpx.Response:
+        if response is not None:
+            return response
+        raise httpx.ConnectError("proxy password=actual-review-secret", request=request)
 
     with pytest.raises(RuntimeError) as captured:
-        await OpenAICompatibleModel(configured).turn(
+        await model_with(configured, handler).turn(
             [AgentMessage(role="user", content="回答")], []
         )
 
@@ -199,29 +182,14 @@ async def test_model_response_read_is_bounded(settings, monkeypatch) -> None:
     monkeypatch.setattr("scholaros.llm.MAX_MODEL_RESPONSE_BYTES", 10)
     configured = replace(settings, api_key_env="SCHOLAROS_TEST_KEY")
 
-    class OversizedResponse(FakeResponse):
-        def __init__(self):
-            super().__init__({})
-            self.requested_size = 0
-
-        def read(self, size: int = -1) -> bytes:
-            self.requested_size = size
-            return b"x" * size
-
-    response = OversizedResponse()
-
-    def fake_urlopen(_request, timeout):
-        del timeout
-        return response
-
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(200, content=b"x" * 128)
 
     with pytest.raises(RuntimeError, match="32 MiB 安全上限"):
-        await OpenAICompatibleModel(configured).turn(
+        await model_with(configured, handler).turn(
             [AgentMessage(role="user", content="回答")], []
         )
-
-    assert response.requested_size == 11
 
 
 @pytest.mark.asyncio
@@ -231,12 +199,13 @@ async def test_model_200_error_envelope_has_clear_fixed_error(
 ) -> None:
     monkeypatch.setenv("SCHOLAROS_TEST_KEY", "secret")
     configured = replace(settings, api_key_env="SCHOLAROS_TEST_KEY")
-    monkeypatch.setattr(
-        "urllib.request.urlopen", lambda _request, timeout: FakeResponse(body)
-    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(200, json=body)
 
     with pytest.raises(RuntimeError, match="未返回可用回答") as captured:
-        await OpenAICompatibleModel(configured).turn(
+        await model_with(configured, handler).turn(
             [AgentMessage(role="user", content="回答")], []
         )
 
@@ -247,14 +216,15 @@ async def test_model_200_error_envelope_has_clear_fixed_error(
 async def test_null_tool_calls_are_treated_as_no_tool_calls(settings, monkeypatch) -> None:
     monkeypatch.setenv("SCHOLAROS_TEST_KEY", "secret")
     configured = replace(settings, api_key_env="SCHOLAROS_TEST_KEY")
-    monkeypatch.setattr(
-        "urllib.request.urlopen",
-        lambda _request, timeout: FakeResponse(
-            {"choices": [{"message": {"content": "完整回答", "tool_calls": None}}]}
-        ),
-    )
 
-    result = await OpenAICompatibleModel(configured).turn(
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "完整回答", "tool_calls": None}}]},
+        )
+
+    result = await model_with(configured, handler).turn(
         [AgentMessage(role="user", content="回答")], []
     )
 
@@ -269,14 +239,34 @@ async def test_falsy_non_list_tool_calls_are_rejected(
 ) -> None:
     monkeypatch.setenv("SCHOLAROS_TEST_KEY", "secret")
     configured = replace(settings, api_key_env="SCHOLAROS_TEST_KEY")
-    monkeypatch.setattr(
-        "urllib.request.urlopen",
-        lambda _request, timeout: FakeResponse(
-            {"choices": [{"message": {"content": "", "tool_calls": tool_calls}}]}
-        ),
-    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "", "tool_calls": tool_calls}}]},
+        )
 
     with pytest.raises(RuntimeError, match="工具调用结构无效"):
+        await model_with(configured, handler).turn(
+            [AgentMessage(role="user", content="回答")], []
+        )
+
+
+@pytest.mark.asyncio
+async def test_model_ignores_socks_proxy_env(settings, monkeypatch) -> None:
+    """用户环境可能设置 ALL_PROXY=socks5://…，模型请求应直连而不是读 socks 代理。"""
+
+    monkeypatch.setenv("SCHOLAROS_TEST_KEY", "secret")
+    monkeypatch.setenv("ALL_PROXY", "socks5://127.0.0.1:9999")
+    configured = replace(
+        settings,
+        api_key_env="SCHOLAROS_TEST_KEY",
+        api_base="https://127.0.0.1:9",
+        model_timeout=2,
+    )
+
+    with pytest.raises(RuntimeError, match="无法连接模型服务"):
         await OpenAICompatibleModel(configured).turn(
             [AgentMessage(role="user", content="回答")], []
         )

@@ -90,7 +90,7 @@ async def test_guided_checkpoints_do_not_rerun_approved_stages(flow):
     pending = await flow.approve_and_run(project.id)
     assert pending.state["search_confirmation_required"] is True
     pending = await flow.confirm_search_plan_and_run(project.id)
-    for stage in ("synthesizing", "designing", "drafting"):
+    for stage in ("searching", "synthesizing", "designing", "drafting", "reviewing", "revising"):
         assert pending.state["pending_checkpoint"] == stage
         pending = await flow.approve_and_run(project.id)
     assert pending.stage == Stage.COMPLETED
@@ -112,10 +112,15 @@ async def test_rerun_preserves_upstream_and_archives_old_outputs(flow):
     for name, data in upstream.items():
         assert flow.store.artifact_path(project.id, name).read_bytes() == data
     history = flow.store.list_history(project.id)
-    assert len(history) == 1
-    assert flow.store.history_artifact_path(project.id, history[0]["revision"], "paper.md").read_bytes() == old_paper
-    manifest = json.loads(flow.store.history_artifact_path(project.id, history[0]["revision"], "manifest.json").read_text())
+    rerun_snapshot = next(item for item in history if item["reason"] == "从 designing 重做")
+    assert flow.store.history_artifact_path(
+        project.id, rerun_snapshot["revision"], "paper.md"
+    ).read_bytes() == old_paper
+    manifest = flow.store.history_manifest(project.id, rerun_snapshot["revision"])
     assert manifest["project"]["stage"] == "completed"
+    assert {item["stage"] for item in history if item["kind"] == "stage"} >= {
+        "scoping", "searching", "synthesizing", "designing", "drafting", "reviewing", "revising",
+    }
     assert len(manifest["artifacts"]["paper.md"]) == 64
 
 
@@ -145,7 +150,9 @@ async def test_new_results_keep_search_and_invalidate_downstream(flow, tmp_path)
         await flow.rerun_from(project.id, Stage.DRAFTING)
     await flow.resume(project.id)
     assert flow.writer.calls.count("scoping") == 1
-    assert len(flow.store.list_history(project.id)) == 1
+    history = flow.store.list_history(project.id)
+    assert any(item["reason"] == "添加研究资料" for item in history)
+    assert any(item["kind"] == "workflow" for item in history)
 
 
 async def test_invalid_rerun_is_non_mutating(flow):
@@ -187,6 +194,9 @@ def test_recovery_api_respects_locks_and_history_paths(flow):
     with TestClient(create_app(flow)) as client:
         history = client.get(f"/api/projects/{project.id}/history").json()
         revision = history[0]["revision"]
+        manifest = client.get(f"/api/projects/{project.id}/history/{revision}")
+        assert manifest.status_code == 200
+        assert manifest.json()["project"]["id"] == project.id
         assert client.get(f"/api/projects/{project.id}/history/{revision}/paper.md").status_code == 200
         assert client.get(f"/api/projects/{project.id}/history/{revision}/.env").status_code == 404
         assert client.get(f"/api/projects/{project.id}/history/invalid/paper.md").status_code == 404
@@ -197,8 +207,27 @@ def test_recovery_api_respects_locks_and_history_paths(flow):
                 assert client.post(f"/api/projects/{project.id}/{action}").status_code == 409
 
 
+async def test_completed_workflow_saves_each_stage_and_final_version(flow):
+    project = flow.create_project("验证每一步和完成稿都会进入版本时间线", guided=False)
+    completed = await flow.run(project.id)
+
+    history = flow.store.list_history(project.id)
+    stage_entries = [item for item in history if item["kind"] == "stage"]
+    assert {item["stage"] for item in stage_entries} == {
+        "scoping", "searching", "synthesizing", "designing",
+        "drafting", "reviewing", "revising",
+    }
+    final_entry = next(item for item in history if item["kind"] == "workflow")
+    assert final_entry["stage"] == "completed"
+    manifest = flow.store.history_manifest(project.id, final_entry["revision"])
+    assert manifest["project"]["stage"] == "completed"
+    assert manifest["project"]["status"] == completed.status.value
+
+
 def test_cli_supports_guided_and_recovery_commands():
-    assert build_parser().parse_args(["run", "test idea", "--guided"]).guided
+    assert build_parser().parse_args(["run", "test idea"]).guided is True
+    assert build_parser().parse_args(["run", "test idea", "--guided"]).guided is True
+    assert build_parser().parse_args(["run", "test idea", "--automatic"]).guided is False
     assert build_parser().parse_args(["rerun", "0123456789ab", "--from-stage", "drafting"]).from_stage == "drafting"
     for action in ("resume", "approve", "history"):
         assert build_parser().parse_args([action, "0123456789ab"]).command == action
@@ -207,9 +236,11 @@ def test_cli_supports_guided_and_recovery_commands():
 async def test_rerun_cannot_skip_pending_confirmation(flow):
     project = flow.create_project("验证局部重做不能绕过人工确认", guided=True)
     await flow.run(project.id)
+    history_before = flow.store.list_history(project.id)
+    assert [item["stage"] for item in history_before] == ["scoping"]
     with pytest.raises(ValueError, match="人工确认"):
         await flow.rerun_from(project.id, Stage.SEARCHING)
-    assert flow.store.list_history(project.id) == []
+    assert flow.store.list_history(project.id) == history_before
     await flow.approve_and_run(project.id)
     with pytest.raises(ValueError, match="外发查询确认"):
         await flow.rerun_from(project.id, Stage.SYNTHESIZING)
@@ -225,7 +256,9 @@ async def test_rerun_invalidates_only_downstream_approvals(flow):
     await flow.approve_and_run(project.id)
     result = await flow.rerun_from(project.id, Stage.DESIGNING)
     assert result.state["pending_checkpoint"] == "designing"
-    assert [item["stage"] for item in result.state["approvals"]] == ["scoping", "synthesizing"]
+    assert [item["stage"] for item in result.state["approvals"]] == [
+        "scoping", "searching", "synthesizing",
+    ]
 
 
 async def test_rejected_plan_snapshot_records_original_idea(flow):
@@ -259,9 +292,9 @@ async def test_offline_guided_project_stays_offline_in_new_workflow(settings, mo
     fresh = ResearchWorkflow(settings, writer=MustNotRunWriter())
     pending = await fresh.approve_and_run(project.id)
     assert pending.state["offline"] is True
-    assert pending.state["pending_checkpoint"] == "synthesizing"
+    assert pending.state["pending_checkpoint"] == "searching"
     assert not pending.state.get("search_confirmation_required")
-    for stage in ("designing", "drafting"):
+    for stage in ("synthesizing", "designing", "drafting", "reviewing", "revising"):
         pending = await fresh.approve_and_run(project.id)
         assert pending.state["pending_checkpoint"] == stage
     assert (await fresh.approve_and_run(project.id)).stage == Stage.COMPLETED
@@ -276,9 +309,11 @@ async def test_empty_search_cannot_be_bypassed_by_partial_rerun(settings):
     with pytest.raises(RuntimeError, match="没有检索到"):
         await flow.run(project.id)
     assert flow.store.get_project(project.id).state["papers"] == []
+    history_before = flow.store.list_history(project.id)
+    assert [item["stage"] for item in history_before] == ["scoping"]
     with pytest.raises(ValueError, match="上游阶段尚未成功"):
         await flow.rerun_from(project.id, Stage.SYNTHESIZING)
-    assert flow.store.list_history(project.id) == []
+    assert flow.store.list_history(project.id) == history_before
 
 
 def _wait_for_idle(client, project_id):
@@ -303,13 +338,15 @@ def test_guided_api_runs_approvals_and_partial_rerun(flow):
         assert client.post(f"/api/projects/{project_id}/approve").status_code == 202
         assert _wait_for_idle(client, project_id)["state"]["search_confirmation_required"]
         assert client.post(f"/api/projects/{project_id}/confirm-search").status_code == 202
-        for stage in ("synthesizing", "designing", "drafting"):
+        for stage in ("searching", "synthesizing", "designing", "drafting", "reviewing", "revising"):
             assert _wait_for_idle(client, project_id)["state"]["pending_checkpoint"] == stage
             assert client.post(f"/api/projects/{project_id}/approve").status_code == 202
         assert _wait_for_idle(client, project_id)["stage"] == "completed"
         assert client.post(f"/api/projects/{project_id}/rerun?stage=designing").status_code == 202
         assert _wait_for_idle(client, project_id)["state"]["pending_checkpoint"] == "designing"
-        assert len(client.get(f"/api/projects/{project_id}/history").json()) == 1
+        history = client.get(f"/api/projects/{project_id}/history").json()
+        assert any(item["stage"] == "completed" and item["kind"] == "workflow" for item in history)
+        assert any(item["reason"] == "从 designing 重做" for item in history)
     assert flow.writer.calls.count("scoping") == 1
     assert flow.writer.calls.count("synthesizing") == 1
 
@@ -317,7 +354,10 @@ def test_guided_api_runs_approvals_and_partial_rerun(flow):
 def test_api_failure_then_resume_keeps_completed_stages(flow):
     flow.writer.fail_design = True
     with TestClient(create_app(flow)) as client:
-        project_id = client.post("/api/projects", json={"idea": "验证 API 后台失败后可以从断点安全恢复"}).json()["id"]
+        project_id = client.post(
+            "/api/projects",
+            json={"idea": "验证 API 后台失败后可以从断点安全恢复", "guided": False},
+        ).json()["id"]
         failed = _wait_for_idle(client, project_id)
         assert failed["status"] == "failed" and failed["stage"] == "designing"
         assert "测试中断" in failed["error"]
@@ -338,9 +378,22 @@ def test_cli_offline_guided_round_trip(settings, monkeypatch, capsys):
     main()
     project = json.loads(capsys.readouterr().out)["project"]
     assert project["state"]["pending_checkpoint"] == "scoping"
-    for expected in ("synthesizing", "designing", "drafting", None):
+    for expected in ("searching", "synthesizing", "designing", "drafting", "reviewing", "revising", None):
         monkeypatch.setattr(sys, "argv", ["scholaros", "approve", project["id"]])
         main()
         project = json.loads(capsys.readouterr().out)
         assert project["state"].get("pending_checkpoint") == expected
     assert project["stage"] == "completed"
+
+async def test_guided_stage_edit_reruns_current_stage_and_pauses_again(flow):
+    project = flow.create_project("验证引导阶段修改后会重跑当前阶段并再次暂停", guided=True)
+    pending = await flow.run(project.id)
+    assert pending.state["pending_checkpoint"] == "scoping"
+
+    flow.save_stage_edit(project.id, stage=Stage.SCOPING, text="收紧研究边界并明确失败条件")
+    flow.confirm_stage_edit(project.id, stage=Stage.SCOPING)
+    rerun = await flow.resume(project.id)
+
+    assert rerun.state["pending_checkpoint"] == "scoping"
+    assert rerun.stage == Stage.SEARCHING
+    assert flow.writer.calls.count("scoping") == 2

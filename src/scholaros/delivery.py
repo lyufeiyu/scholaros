@@ -6,6 +6,7 @@ import json
 import re
 import zipfile
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 from xml.sax.saxutils import escape
 
@@ -18,6 +19,7 @@ SUPPORTING_ARTIFACTS = (
     "evidence.json",
     "research-design.json",
     "figure-story.json",
+    "table-story.json",
     "final-review.json",
 )
 
@@ -36,7 +38,7 @@ def prepare_delivery(project: Project, store: ProjectStore) -> dict[str, Any]:
         store.save_artifact(
             project.id,
             "paper.tex",
-            markdown_to_tex(markdown, language=config["output_language"]),
+            markdown_to_tex(markdown),
         )
 
     format_names = {"md": "paper.md", "docx": "paper.docx", "tex": "paper.tex", "pdf": "paper.pdf"}
@@ -78,6 +80,7 @@ def prepare_delivery(project: Project, store: ProjectStore) -> dict[str, Any]:
                 "role": _artifact_role(name),
             }
         )
+    template_files = _ieee_template_records() if "tex" in available_formats else []
     manifest = {
         "schema_version": 1,
         "project_id": project.id,
@@ -89,6 +92,7 @@ def prepare_delivery(project: Project, store: ProjectStore) -> dict[str, Any]:
         "ready": not blockers,
         "blockers": blockers,
         "files": file_records,
+        "template_files": template_files,
         "sharing_boundary": _sharing_boundary(config["requested_scope"]),
         "external_action": "本地交付不代表已投稿、已发布或获得外发授权。",
     }
@@ -159,28 +163,98 @@ def markdown_to_docx(markdown: str) -> bytes:
     return output.getvalue()
 
 
-def markdown_to_tex(markdown: str, *, language: str = "zh") -> str:
-    document_class = "ctexart" if language in {"zh", "multilingual"} else "article"
-    body = []
+IEEE_TEMPLATE_ROOT = Path(__file__).resolve().parents[2] / "templates" / "ieee" / "IEEEtran"
+IEEE_JOURNAL_TEMPLATE = IEEE_TEMPLATE_ROOT / "bare_jrnl.tex"
+IEEE_TEMPLATE_FILES = (
+    ("IEEEtran.cls", IEEE_TEMPLATE_ROOT / "IEEEtran.cls"),
+    ("IEEEtran.bst", IEEE_TEMPLATE_ROOT / "bibtex" / "IEEEtran.bst"),
+)
+
+
+def _ieee_template_records() -> list[dict[str, Any]]:
+    records = []
+    for name, path in IEEE_TEMPLATE_FILES:
+        if not path.is_file():
+            continue
+        content = path.read_bytes()
+        records.append(
+            {
+                "name": name,
+                "package_path": name,
+                "bytes": len(content),
+                "sha256": hashlib.sha256(content).hexdigest(),
+                "role": "latex_template",
+            }
+        )
+    return records
+
+
+def _ieee_template_source() -> str:
+    try:
+        return IEEE_JOURNAL_TEMPLATE.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def _ieee_document_class() -> str:
+    """从仓库内保存的 IEEEtran 期刊模板读取文档类声明。"""
+
+    template = _ieee_template_source()
+    match = re.search(r"^\\documentclass(?:\[[^]]+\])?\{IEEEtran\}", template, re.MULTILINE)
+    return match.group(0) if match else "\\documentclass[journal]{IEEEtran}"
+
+
+def _ieee_package_lines() -> list[str]:
+    """复用本地 bare_jrnl 模板中的实际宏包声明，避免只借用类名。"""
+
+    template = _ieee_template_source()
+    lines = re.findall(r"^\\usepackage(?:\[[^]]+\])?\{[^}]+\}", template, re.MULTILINE)
+    return list(dict.fromkeys(lines))
+
+
+def markdown_to_tex(markdown: str) -> str:
+    """将 Markdown 草稿放入本地 IEEEtran 期刊模板骨架；输出统一为英文 IEEE 期刊格式。"""
+
+    body: list[str] = []
+    title = "ScholarOS Research Manuscript"
     commands = {1: "section", 2: "subsection", 3: "subsubsection"}
+    first_heading = True
     for raw_line in markdown.splitlines():
         line = raw_line.rstrip()
         heading = re.match(r"^(#{1,6})\s+(.+)$", line)
         if heading:
+            if first_heading and len(heading.group(1)) == 1:
+                title = _tex_text(heading.group(2))
+                first_heading = False
+                continue
+            first_heading = False
             level = min(3, len(heading.group(1)))
             body.append(f"\\{commands[level]}{{{_tex_text(heading.group(2))}}}")
         elif line.startswith("- "):
             body.append(f"\\textbullet\\ {_tex_text(line[2:])}\\par")
         elif line:
+            first_heading = False
             body.append(f"{_tex_text(line)}\n")
         else:
             body.append("")
+    template_packages = _ieee_package_lines()
+    if not template_packages:
+        template_packages = [
+            "\\usepackage{amsmath,amssymb}",
+            "\\usepackage{graphicx}",
+            "\\usepackage{booktabs}",
+            "\\usepackage{url}",
+        ]
+    if not any("hyperref" in line for line in template_packages):
+        template_packages.append("\\usepackage[hidelinks]{hyperref}")
     return (
-        f"\\documentclass[11pt]{{{document_class}}}\n"
-        "\\usepackage[margin=2.5cm]{geometry}\n"
-        "\\usepackage{hyperref}\n"
-        "\\usepackage{graphicx}\n"
+        f"{_ieee_document_class()}\n"
+        + "\n".join(template_packages)
+        + "\n"
+        "\\title{" + title + "}\n"
+        "\\author{ScholarOS Research Workspace}\n"
         "\\begin{document}\n"
+        "\\maketitle\n"
         + "\n".join(body)
         + "\n\\end{document}\n"
     )
@@ -193,6 +267,13 @@ def _delivery_zip(project_id: str, store: ProjectStore, manifest: Mapping[str, A
             path = store.artifact_path(project_id, str(item["name"]))
             if path is not None:
                 archive.writestr(path.name, path.read_bytes())
+        for item in manifest.get("template_files", []):
+            template_path = next(
+                (path for name, path in IEEE_TEMPLATE_FILES if name == item.get("name")),
+                None,
+            )
+            if template_path is not None and template_path.is_file():
+                archive.writestr(str(item["package_path"]), template_path.read_bytes())
         archive.writestr(
             "delivery-manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2)
         )

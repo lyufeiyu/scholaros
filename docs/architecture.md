@@ -21,7 +21,7 @@ flowchart TB
     RT --> LLM["OpenAI-compatible model"]
     LS --> SRC["arXiv / OpenAlex / Crossref / Semantic Scholar / DBLP / ACM / IEEE"]
     WF --> STORE["SQLite projects and events"]
-    WF --> ART["JSON / Markdown / DOCX / TeX / ZIP artifacts"]
+    WF --> ART["JSON / Markdown / TeX / ZIP artifacts"]
     ING["PDF / DOCX / text and data files"] --> WF
 ```
 
@@ -42,7 +42,7 @@ stateDiagram-v2
     ScopeApproval --> Searching: approved
 ```
 
-Each stage persists its current state before execution, stores artifacts on completion, and advances the saved cursor. `resume` retries the interrupted stage without repeating completed upstream work; it does not bypass a pending confirmation. Optional guided mode pauses after scope, evidence, design, and drafting, with a separate outbound-search confirmation. See [Guided work and recovery](workflow.md) for all checkpoints and actions. A single paper-source failure is recorded; zero total results still stop a normal workflow.
+Each stage persists its current state before execution, stores artifacts on completion, and advances the saved cursor. `resume` retries the interrupted stage without repeating completed upstream work; it does not bypass a pending confirmation. The default interactive mode pauses after every stage; one-step mode runs continuously, while outbound search still requires its separate confirmation. See [Guided work and recovery](workflow.md) for all checkpoints and actions. A single paper-source failure is recorded; zero total results still stop a normal workflow.
 
 ## Runtime design choices
 
@@ -75,7 +75,7 @@ Multi-Agent behavior is defined by role objectives, capability permissions, inpu
 3. **Metadata/full-text separation:** a DOI or abstract does not imply authorized full-text access.
 4. **Result integrity:** without `results` material, the output is a registered-report-style draft; result values must be located in uploaded result material or the check fails.
 5. **Deterministic checks:** initial and revised drafts are checked for structure, evidence, in-text citation consistency, method reproducibility elements, figure design, table design, result provenance, researcher responsibility, and draft depth.
-6. **Artifact-first workflow:** each stage emits inspectable JSON or Markdown; delivery can additionally derive editable DOCX and TeX plus a hash manifest and a ZIP that excludes original uploads.
+6. **Artifact-first workflow:** each stage emits inspectable JSON or Markdown; delivery can additionally derive editable TeX plus a hash manifest and a ZIP that excludes original uploads.
 7. **Source-topic anchoring:** uploaded source material participates in scoping, and a phrase verifiable in one source excerpt prevents acronym collisions from changing the domain; filenames and cross-document concatenation are not evidence.
 8. **Human authorization before outbound search:** PDFs are untrusted input. A project with source documents stores its title and query plan before contacting third parties, and waits for user confirmation. A rejected plan can revise the research description and return to scoping. Cross-language or sensitive phrases generate warnings rather than static keyword bans.
 9. **Safe grouped search:** outbound terms are checked for structure and topic relation; complementary query clusters retain coverage. A source that rate-limits or fails is not repeatedly hit in the same batch.
@@ -85,7 +85,7 @@ Multi-Agent behavior is defined by role objectives, capability permissions, inpu
 
 ## From MVP to research platform
 
-Version 0.2 adds the eight-area project workbench, six task types, configurable learning and delivery targets, contribution/figure decisions, feedback-driven revision, DOCX/TeX export, and a verifiable local delivery package. Page-level full-text parsing, claim-level evidence, experiment execution, final media rendering, collaboration, and expert approval remain later work.
+Version 0.2 adds a stage-based project workbench, six task types, configurable learning and delivery targets, contribution/figure decisions, feedback-driven revision, Markdown/TeX export, and a verifiable local delivery package. Page-level full-text parsing, claim-level evidence, experiment execution, final media rendering, collaboration, and expert approval remain later work.
 
 RL should not begin by training an LLM. After sufficient events, check outcomes, and user feedback exist, it could optimize workflow decisions such as when to search, what to read, which role to call, and when to request human confirmation.
 

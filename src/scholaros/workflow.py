@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from scholaros.config import Settings
-from scholaros.delivery import prepare_delivery
+from scholaros.delivery import markdown_to_tex, prepare_delivery
 from scholaros.domain import (
     MAX_RESEARCH_IDEA_LENGTH,
     Event,
@@ -32,9 +32,10 @@ from scholaros.workspace import (
     DRAFT_CONFIGURATION_FIELDS,
     SCOPING_CONFIGURATION_FIELDS,
     SEARCH_CONFIGURATION_FIELDS,
-    build_contribution_options,
+    build_contribution_blueprint,
     build_figure_story,
     build_learning_plan,
+    build_table_story,
     configuration_changes,
     normalize_configuration,
     record_decision,
@@ -64,22 +65,31 @@ class ResearchWorkflow:
         Stage.REVISING,
     ]
     stage_outputs = {
-        Stage.SCOPING: ("spec", "learning_plan", "contribution_options"),
-        Stage.SEARCHING: ("papers", "source_failures", "search_filtered_out", "search_queries",
-                          "search_skipped",
-                          "search_plan_confirmed", "search_confirmation_required", "search_plan_warnings"),
+        Stage.SCOPING: ("spec", "learning_plan", "contribution_blueprint"),
+        Stage.SEARCHING: (
+            "papers",
+            "source_failures",
+            "search_filtered_out",
+            "search_queries",
+            "search_skipped",
+            "search_plan_confirmed",
+            "search_confirmation_required",
+            "search_plan_warnings",
+            "llm_discovery_count",
+        ),
         Stage.SYNTHESIZING: ("evidence",),
-        Stage.DESIGNING: ("design", "figure_story"),
+        Stage.DESIGNING: ("design", "figure_story", "table_story"),
         Stage.DRAFTING: (),
         Stage.REVIEWING: ("review",),
         Stage.REVISING: ("final_review",),
     }
     stage_artifacts = {
-        Stage.SCOPING: ("learning-plan.json", "contribution-options.json"),
+        Stage.SCOPING: ("learning-plan.json", "contribution-blueprint.json"),
         Stage.SEARCHING: ("papers.json",),
         Stage.SYNTHESIZING: ("evidence.json",),
-        Stage.DESIGNING: ("research-design.json", "figure-story.json"),
-        Stage.DRAFTING: ("paper-draft.md",), Stage.REVIEWING: ("review.json",),
+        Stage.DESIGNING: ("research-design.json", "figure-story.json", "table-story.json"),
+        Stage.DRAFTING: ("paper-draft.md", "paper-draft.tex"),
+        Stage.REVIEWING: ("review.json",),
         Stage.REVISING: (
             "paper.md",
             "final-review.json",
@@ -90,7 +100,17 @@ class ResearchWorkflow:
             "delivery-package.zip",
         ),
     }
-    guided_stages = {Stage.SCOPING, Stage.SYNTHESIZING, Stage.DESIGNING, Stage.DRAFTING}
+    # 引导模式在每个阶段完成后暂停；检索阶段仍先经过独立的外发计划确认。
+    guided_stages = frozenset(stage_order)
+    stage_history_labels = {
+        Stage.SCOPING: "范围与配置",
+        Stage.SEARCHING: "研究材料与检索",
+        Stage.SYNTHESIZING: "证据与学习",
+        Stage.DESIGNING: "方法与图表",
+        Stage.DRAFTING: "研究稿件",
+        Stage.REVIEWING: "质量检查",
+        Stage.REVISING: "总览与交付",
+    }
 
     def __init__(
         self,
@@ -113,6 +133,7 @@ class ResearchWorkflow:
         self.ingestor = DocumentIngestor()
         self.progress_sink = progress_sink
         self.allow_empty_search = allow_empty_search
+        self.interrupt_requested: set[str] = set()
 
     def create_project(
         self,
@@ -176,6 +197,92 @@ class ResearchWorkflow:
             self._event(project, "configuration_updated", {"changed_fields": sorted(changed)})
             return project
 
+    def save_stage_edit(
+        self,
+        project_id: str,
+        *,
+        stage: Stage | str,
+        text: str,
+        title: str | None = None,
+        keywords: Sequence[str] | None = None,
+    ) -> Project:
+        """保存尚未确认的阶段修改要求，不触碰现有结果。"""
+
+        clean_text = text.strip()
+        stage = Stage(stage)
+        if stage not in self.stage_order:
+            raise ValueError("请选择七个研究阶段之一")
+        clean_title = (title or "").strip()
+        clean_keywords = [str(item).strip() for item in (keywords or []) if str(item).strip()]
+        clean_keywords = list(dict.fromkeys(clean_keywords))
+        if stage == Stage.SCOPING:
+            if title is not None and not 2 <= len(clean_title) <= 300:
+                raise ValueError("论文题目必须为 2—300 个字符")
+            if keywords is not None and not 1 <= len(clean_keywords) <= 10:
+                raise ValueError("论文搜索关键词需要 1—10 个不重复词组")
+            if any(len(item) > 120 for item in clean_keywords):
+                raise ValueError("单个论文搜索关键词不能超过 120 个字符")
+        if not 2 <= len(clean_text) <= 12_000 and not (
+            stage == Stage.SCOPING and (title is not None or keywords is not None)
+        ):
+            raise ValueError("阶段修改要求必须为 2—12000 个字符，或填写范围阶段字段")
+        with self.store.project_lock(project_id):
+            project = self._require_project(project_id)
+            if project.status == ProjectStatus.RUNNING:
+                raise RuntimeError("项目运行中不能编辑阶段要求")
+            pending = {
+                "text": clean_text,
+                "updated_at": utc_now(),
+            }
+            if stage == Stage.SCOPING:
+                pending["title"] = clean_title if title is not None else None
+                pending["keywords"] = clean_keywords if keywords is not None else None
+            project.state.setdefault("pending_stage_edits", {})[stage.value] = pending
+            self.store.save_project(project)
+            self._event(project, "stage_edit_saved", {"stage": stage.value})
+            return project
+
+    def confirm_stage_edit(self, project_id: str, *, stage: Stage | str) -> None:
+        """确认修改后才归档旧结果、使当前阶段及其下游失效。"""
+
+        with self.store.project_lock(project_id):
+            self.confirm_stage_edit_locked(project_id, stage=stage)
+
+    def confirm_stage_edit_locked(self, project_id: str, *, stage: Stage | str) -> None:
+        """调用者已持有项目锁时确认阶段修改。"""
+
+        stage = Stage(stage)
+        project = self._require_project(project_id)
+        pending = project.state.get("pending_stage_edits", {}).get(stage.value)
+        if not isinstance(pending, dict) or not (
+            str(pending.get("text") or "").strip()
+            or pending.get("title") is not None
+            or pending.get("keywords") is not None
+        ):
+            raise ValueError("请先保存本阶段的修改要求，再确认更新")
+        text = str(pending["text"]).strip()
+        scope_override = {
+            key: pending[key]
+            for key in ("title", "keywords")
+            if key in pending and pending[key] is not None
+        }
+        self.prepare_rerun(project_id, stage)
+        project = self._require_project(project_id)
+        project.state.setdefault("stage_instructions", {})[stage.value] = text
+        if scope_override:
+            project.state["pending_scope_override"] = scope_override
+        project.state.setdefault("stage_edit_history", []).append(
+            {
+                "stage": stage.value,
+                "text": text,
+                **scope_override,
+                "confirmed_at": utc_now(),
+            }
+        )
+        project.state.get("pending_stage_edits", {}).pop(stage.value, None)
+        self.store.save_project(project)
+        self._event(project, "stage_edit_confirmed", {"stage": stage.value})
+
     def save_decision(
         self,
         project_id: str,
@@ -196,21 +303,7 @@ class ResearchWorkflow:
                 value=value,
                 comment=comment,
             )
-            if decision_type == "contribution":
-                options = project.state.get("contribution_options", [])
-                selected = next((item for item in options if item.get("id") == item_id), None)
-                if selected is None:
-                    raise ValueError("贡献候选不存在，请先完成范围界定")
-                if value != "selected":
-                    raise ValueError("贡献候选只能标记为 selected")
-                spec = project.state.get("spec")
-                if isinstance(spec, dict):
-                    if project.state.get("evidence") or project.state.get("design"):
-                        self.store.snapshot_project(project, "修改贡献方向")
-                        self._invalidate_from(project, Stage.SYNTHESIZING)
-                    spec["contribution"] = selected["summary"]
-                    project.state["selected_contribution"] = item_id
-            elif decision_type == "figure":
+            if decision_type == "figure":
                 story = project.state.get("figure_story", [])
                 figure = next((item for item in story if item.get("id") == item_id), None)
                 if figure is None:
@@ -288,6 +381,10 @@ class ResearchWorkflow:
                 project.state.get("configuration")
             )
             project.state["schema_version"] = 2
+            self.store.clear_generated_artifacts(
+                project.id,
+                {"paper.docx", "paper.pdf", "delivery-manifest.json", "delivery-package.zip"},
+            )
             manifest = prepare_delivery(project, self.store)
             project.state["delivery_manifest"] = manifest
             self.store.save_project(project)
@@ -300,6 +397,76 @@ class ResearchWorkflow:
                     "missing_formats": manifest["missing_formats"],
                 },
             )
+            return project
+
+    def ensure_preview_artifacts(self, project_id: str) -> Project:
+        """为旧项目补齐可直接预览的 LaTeX 派生稿，不触发研究流程。"""
+
+        with self.store.project_lock(project_id):
+            project = self._require_project(project_id)
+            if project.status == ProjectStatus.RUNNING:
+                return project
+            configuration = normalize_configuration(project.state.get("configuration"))
+            for markdown_name, tex_name in (
+                ("paper-draft.md", "paper-draft.tex"),
+                ("paper.md", "paper.tex"),
+            ):
+                markdown_path = self.store.artifact_path(project.id, markdown_name)
+                if markdown_path is None or self.store.artifact_path(project.id, tex_name) is not None:
+                    continue
+                self.store.save_artifact(
+                    project.id,
+                    tex_name,
+                    markdown_to_tex(markdown_path.read_text(encoding="utf-8")),
+                )
+            spec_value = project.state.get("spec")
+            if isinstance(spec_value, dict) and not project.state.get("contribution_blueprint"):
+                blueprint = build_contribution_blueprint(_spec(spec_value))
+                project.state["contribution_blueprint"] = blueprint
+                self.store.save_artifact(
+                    project.id,
+                    "contribution-blueprint.json",
+                    json.dumps(blueprint, ensure_ascii=False, indent=2),
+                )
+                self.store.save_project(project)
+            design = project.state.get("design")
+            if isinstance(design, dict):
+                migrated_story = False
+                has_results = any(
+                    item.get("role") == "results"
+                    for item in project.state.get("documents", [])
+                )
+                figures = project.state.get("figure_story", [])
+                if not figures or any("composition" not in item for item in figures):
+                    existing = {item.get("id"): item for item in figures}
+                    figures = build_figure_story(
+                        configuration, has_results=has_results, design=design
+                    )
+                    for figure in figures:
+                        previous = existing.get(figure["id"], {})
+                        for key in ("decision", "comment", "media"):
+                            if previous.get(key) is not None:
+                                figure[key] = previous[key]
+                    project.state["figure_story"] = figures
+                    migrated_story = True
+                    self.store.save_artifact(
+                        project.id,
+                        "figure-story.json",
+                        json.dumps(figures, ensure_ascii=False, indent=2),
+                    )
+                if not project.state.get("table_story"):
+                    tables = build_table_story(
+                        configuration, has_results=has_results, design=design
+                    )
+                    project.state["table_story"] = tables
+                    migrated_story = True
+                    self.store.save_artifact(
+                        project.id,
+                        "table-story.json",
+                        json.dumps(tables, ensure_ascii=False, indent=2),
+                    )
+                if migrated_story:
+                    self.store.save_project(project)
             return project
 
     def add_document(
@@ -466,12 +633,6 @@ class ResearchWorkflow:
             ]
         if stage == Stage.SCOPING:
             project.title = None
-            project.state.pop("selected_contribution", None)
-            project.state["decisions"] = [
-                item
-                for item in project.state.get("decisions", [])
-                if item.get("type") != "contribution"
-            ]
 
     async def rerun_from(self, project_id: str, stage: Stage | str) -> Project:
         with self.store.project_lock(project_id):
@@ -488,10 +649,38 @@ class ResearchWorkflow:
             "stage": pending, "confirmed_at": utc_now(),
         })
         project.state.pop("pending_checkpoint")
-        project.status = ProjectStatus.CREATED
         project.error = None
+        if pending == Stage.REVISING.value:
+            # 最后一个阶段没有可继续执行的下游；确认后直接完成工作流，
+            # 但仍保留 final_review 的真实通过/待人工处理状态。
+            project.stage = Stage.COMPLETED
+            final_passed = bool(project.state.get("final_review", {}).get("passed"))
+            unresolved_feedback = any(
+                item.get("status") in {"pending", "manual_required"}
+                for item in project.state.get("feedback", [])
+            )
+            project.status = (
+                ProjectStatus.COMPLETED
+                if final_passed and not unresolved_feedback
+                else ProjectStatus.NEEDS_ATTENTION
+            )
+        else:
+            project.status = ProjectStatus.CREATED
+            project.error = None
         self.store.save_project(project)
         self._event(project, "checkpoint_approved", {"stage": pending})
+        if pending == Stage.REVISING.value:
+            self.store.snapshot_project(
+                project,
+                "工作流完成",
+                stage=Stage.COMPLETED.value,
+                kind="workflow",
+            )
+            self._event(
+                project,
+                "workflow_completed",
+                {"status": project.status.value, "artifacts": self.store.list_artifacts(project.id)},
+            )
 
     async def approve_and_run(self, project_id: str) -> Project:
         with self.store.project_lock(project_id):
@@ -507,6 +696,7 @@ class ResearchWorkflow:
                 writer=ResearchWriter(), reviewer=self.reviewer,
                 progress_sink=self.progress_sink, allow_empty_search=True,
             )
+            offline_flow.interrupt_requested = self.interrupt_requested
             return await offline_flow._run_locked(project_id, restart=restart)
         self.validate_sources(project.selected_sources)
         if project.status == ProjectStatus.RUNNING and not restart:
@@ -534,6 +724,7 @@ class ResearchWorkflow:
             project.stage = Stage.SCOPING
         project.status = ProjectStatus.RUNNING
         project.error = None
+        project.state.pop("interrupted", None)
         self.store.save_project(project)
 
         try:
@@ -551,8 +742,16 @@ class ResearchWorkflow:
                 self.store.save_project(project)
             await self._run_stages(project)
         except asyncio.CancelledError:
-            project.status = ProjectStatus.FAILED
-            project.error = "服务停止导致工作流中断，可重新运行"
+            user_interrupted = project_id in self.interrupt_requested
+            self.interrupt_requested.discard(project_id)
+            project.status = (
+                ProjectStatus.NEEDS_ATTENTION if user_interrupted else ProjectStatus.FAILED
+            )
+            if user_interrupted:
+                project.state["interrupted"] = True
+                project.error = "用户主动中断，可从断点继续"
+            else:
+                project.error = "服务停止导致工作流中断，可重新运行"
             self.store.save_project(project)
             self._event(
                 project,
@@ -638,6 +837,11 @@ class ResearchWorkflow:
             self._reject_search_plan_locked(project_id, revised_idea=revised_idea)
             return await self._run_locked(project_id)
 
+    def request_interrupt(self, project_id: str) -> None:
+        """标记一次用户主动中断，供中断异常分支写入正确状态语义。"""
+
+        self.interrupt_requested.add(project_id)
+
     def validate_sources(self, sources: Sequence[str]) -> None:
         restricted = sorted(set(sources) & self.search.workflow_blocked_sources)
         if restricted:
@@ -696,13 +900,22 @@ class ResearchWorkflow:
 
             if stage == Stage.SCOPING:
                 spec = await self._scope(project)
+                scope_override = project.state.pop("pending_scope_override", {})
+                if isinstance(scope_override, dict):
+                    if scope_override.get("title"):
+                        spec.title = str(scope_override["title"]).strip()
+                    if scope_override.get("keywords"):
+                        spec.keywords = [
+                            str(item).strip()
+                            for item in scope_override["keywords"]
+                            if str(item).strip()
+                        ]
                 project.title = spec.title
                 project.state["spec"] = spec.to_dict()
                 configuration = normalize_configuration(project.state.get("configuration"))
                 project.state["configuration"] = configuration
                 project.state["learning_plan"] = build_learning_plan(configuration, spec)
-                project.state["contribution_options"] = build_contribution_options(spec)
-                project.state["selected_contribution"] = "primary"
+                project.state["contribution_blueprint"] = build_contribution_blueprint(spec)
                 self.store.save_artifact(
                     project.id,
                     "learning-plan.json",
@@ -710,9 +923,9 @@ class ResearchWorkflow:
                 )
                 self.store.save_artifact(
                     project.id,
-                    "contribution-options.json",
+                    "contribution-blueprint.json",
                     json.dumps(
-                        project.state["contribution_options"], ensure_ascii=False, indent=2
+                        project.state["contribution_blueprint"], ensure_ascii=False, indent=2
                     ),
                 )
 
@@ -722,6 +935,9 @@ class ResearchWorkflow:
                     project.state.get("configuration")
                 )
                 queries = _workflow_search_queries(spec.get("keywords", []), project.idea)
+                search_instruction = self._stage_instruction(project, Stage.SEARCHING)
+                if search_instruction:
+                    queries = list(dict.fromkeys([*queries, search_instruction[:500]]))
                 venue_query = project.state.get("learning_plan", {}).get("venue_query")
                 if venue_query:
                     queries = list(dict.fromkeys([*queries, venue_query]))
@@ -733,6 +949,7 @@ class ResearchWorkflow:
                     project.state["papers"] = []
                     project.state["source_failures"] = []
                     project.state["search_filtered_out"] = 0
+                    project.state["llm_discovery_count"] = 0
                     self.store.save_artifact(project.id, "papers.json", "[]")
                     self.store.save_project(project)
                 else:
@@ -773,12 +990,17 @@ class ResearchWorkflow:
                         ),
                         selected=project.selected_sources or self.search.workflow_sources(),
                     )
-                    if not result.papers:
-                        discover_papers = getattr(self.writer, "discover_papers", None)
-                        if callable(discover_papers) and getattr(self.writer, "model", None) is not None:
-                            discovered = await discover_papers("；".join(queries))
-                            if discovered:
-                                result.papers.extend(discovered)
+                    discover_papers = getattr(self.writer, "discover_papers", None)
+                    discovered = []
+                    if callable(discover_papers):
+                        discovered = await discover_papers("；".join(queries))
+                        if discovered:
+                            result.papers = self.search.merge_papers(
+                                " ".join(queries), [*result.papers, *discovered], 100
+                            )
+                    project.state["llm_discovery_count"] = len(
+                        [paper for paper in result.papers if "llm_discovery" in paper.sources]
+                    )
                     project.state["papers"] = [paper.to_dict() for paper in result.papers]
                     project.state["source_failures"] = [
                         item.to_dict() for item in result.failures
@@ -803,8 +1025,13 @@ class ResearchWorkflow:
             elif stage == Stage.SYNTHESIZING:
                 spec = _spec(project.state["spec"])
                 papers = _papers(project.state.get("papers", []))
-                evidence = await self.writer.synthesize(
-                    spec, papers, project.state.get("documents", [])
+                evidence = await self._call_writer_stage(
+                    "synthesize",
+                    project,
+                    Stage.SYNTHESIZING,
+                    spec,
+                    papers,
+                    project.state.get("documents", []),
                 )
                 project.state["evidence"] = [item.to_dict() for item in evidence]
                 self.store.save_artifact(
@@ -816,13 +1043,24 @@ class ResearchWorkflow:
             elif stage == Stage.DESIGNING:
                 spec = _spec(project.state["spec"])
                 evidence = _evidence(project.state.get("evidence", []))
-                project.state["design"] = await self.writer.design(spec, evidence)
+                project.state["design"] = await self._call_writer_stage(
+                    "design", project, Stage.DESIGNING, spec, evidence
+                )
                 project.state["figure_story"] = build_figure_story(
                     project.state.get("configuration", {}),
                     has_results=any(
                         item.get("role") == "results"
                         for item in project.state.get("documents", [])
                     ),
+                    design=project.state["design"],
+                )
+                project.state["table_story"] = build_table_story(
+                    project.state.get("configuration", {}),
+                    has_results=any(
+                        item.get("role") == "results"
+                        for item in project.state.get("documents", [])
+                    ),
+                    design=project.state["design"],
                 )
                 self.store.save_artifact(
                     project.id,
@@ -833,6 +1071,11 @@ class ResearchWorkflow:
                     project.id,
                     "figure-story.json",
                     json.dumps(project.state["figure_story"], ensure_ascii=False, indent=2),
+                )
+                self.store.save_artifact(
+                    project.id,
+                    "table-story.json",
+                    json.dumps(project.state["table_story"], ensure_ascii=False, indent=2),
                 )
 
             elif stage == Stage.DRAFTING:
@@ -847,8 +1090,24 @@ class ResearchWorkflow:
                     if not sources:
                         raise RuntimeError("审阅或核查工作必须先上传一份可提取文本的原稿")
                     draft = sources[0]
+                    instruction = self._stage_instruction(project, Stage.DRAFTING)
+                    if instruction:
+                        draft = await self.writer.revise(
+                            draft,
+                            (),
+                            (
+                                {
+                                    "scope": "manuscript",
+                                    "text": instruction,
+                                    "status": "confirmed_stage_instruction",
+                                },
+                            ),
+                        )
                 else:
-                    draft = await self.writer.draft(
+                    draft = await self._call_writer_stage(
+                        "draft",
+                        project,
+                        Stage.DRAFTING,
                         _spec(project.state["spec"]),
                         _papers(project.state.get("papers", [])),
                         _evidence(project.state.get("evidence", [])),
@@ -857,6 +1116,11 @@ class ResearchWorkflow:
                         configuration,
                     )
                 self.store.save_artifact(project.id, "paper-draft.md", draft)
+                self.store.save_artifact(
+                    project.id,
+                    "paper-draft.tex",
+                    markdown_to_tex(draft),
+                )
 
             elif stage == Stage.REVIEWING:
                 draft_path = self.store.artifact_path(project.id, "paper-draft.md")
@@ -872,11 +1136,23 @@ class ResearchWorkflow:
                     _evidence(project.state.get("evidence", [])),
                     result_sources=result_sources,
                 )
-                project.state["review"] = review.to_dict()
+                review_value = review.to_dict()
+                review_instruction = self._stage_instruction(project, Stage.REVIEWING)
+                if review_instruction:
+                    review_value["findings"].append(
+                        {
+                            "severity": "medium",
+                            "code": "researcher_review_focus",
+                            "message": f"研究者要求本轮审阅重点检查：{review_instruction}",
+                            "suggestion": "修订时逐项回应这一已确认的审阅要求，并由研究者复核。",
+                        }
+                    )
+                    review_value["passed"] = False
+                project.state["review"] = review_value
                 self.store.save_artifact(
                     project.id,
                     "review.json",
-                    json.dumps(review.to_dict(), ensure_ascii=False, indent=2),
+                    json.dumps(review_value, ensure_ascii=False, indent=2),
                 )
 
             elif stage == Stage.REVISING:
@@ -891,6 +1167,16 @@ class ResearchWorkflow:
                 manuscript_feedback = [
                     item for item in feedback if item.get("scope") in {"manuscript", "all"}
                 ]
+                for instruction_stage in (Stage.REVISING,):
+                    instruction = self._stage_instruction(project, instruction_stage)
+                    if instruction:
+                        manuscript_feedback.append(
+                            {
+                                "scope": "manuscript",
+                                "text": instruction,
+                                "status": "confirmed_stage_instruction",
+                            }
+                        )
                 figure_feedback = [
                     item for item in feedback if item.get("scope") in {"figures", "all"}
                 ]
@@ -929,6 +1215,12 @@ class ResearchWorkflow:
                 )
                 project.state["final_review"] = final_review.to_dict()
                 self.store.save_artifact(project.id, "paper.md", revised)
+                configuration = normalize_configuration(project.state.get("configuration"))
+                self.store.save_artifact(
+                    project.id,
+                    "paper.tex",
+                    markdown_to_tex(revised),
+                )
                 self.store.save_artifact(
                     project.id,
                     "final-review.json",
@@ -946,6 +1238,12 @@ class ResearchWorkflow:
                 project.status = ProjectStatus.NEEDS_ATTENTION
                 project.error = f"{stage.value} 已完成，请检查结果后确认继续，或选择该阶段重做"
             self.store.save_project(project)
+            self.store.snapshot_project(
+                project,
+                f"完成阶段：{self.stage_history_labels[stage]}",
+                stage=stage.value,
+                kind="stage",
+            )
 
             self._event(project, "stage_completed", {"stage": stage.value})
             if project.state.get("pending_checkpoint"):
@@ -963,6 +1261,12 @@ class ResearchWorkflow:
             else ProjectStatus.NEEDS_ATTENTION
         )
         self.store.save_project(project)
+        self.store.snapshot_project(
+            project,
+            "工作流完成",
+            stage=Stage.COMPLETED.value,
+            kind="workflow",
+        )
         self._event(
             project,
             "workflow_completed",
@@ -1044,12 +1348,42 @@ class ResearchWorkflow:
             kwargs: dict[str, Any] = {"documents": documents}
             if any(parameter.name == "configuration" for parameter in parameters) or has_kwargs:
                 kwargs["configuration"] = configuration
+            if any(parameter.name == "instruction" for parameter in parameters) or has_kwargs:
+                kwargs["instruction"] = self._stage_instruction(project, Stage.SCOPING)
             return await scope(project.idea, **kwargs)
         if has_kwargs:
-            return await scope(project.idea, documents=documents, configuration=configuration)
+            return await scope(
+                project.idea,
+                documents=documents,
+                configuration=configuration,
+                instruction=self._stage_instruction(project, Stage.SCOPING),
+            )
         if document_parameter is not None or has_varargs:
             return await scope(project.idea, documents)
         return await scope(project.idea)
+
+    @staticmethod
+    def _stage_instruction(project: Project, stage: Stage) -> str:
+        value = project.state.get("stage_instructions", {}).get(stage.value, "")
+        return str(value).strip()
+
+    async def _call_writer_stage(
+        self, method_name: str, project: Project, stage: Stage, *args: Any
+    ) -> Any:
+        """向新版 writer 传递阶段要求，同时兼容测试和扩展中的旧签名。"""
+
+        method = getattr(self.writer, method_name)
+        parameters = inspect.signature(method).parameters.values()
+        accepts_instruction = any(
+            parameter.name == "instruction"
+            or parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters
+        )
+        if accepts_instruction:
+            return await method(
+                *args, instruction=self._stage_instruction(project, stage)
+            )
+        return await method(*args)
 
 
 def _spec(value: dict[str, Any]):

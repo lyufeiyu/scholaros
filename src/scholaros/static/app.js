@@ -4,21 +4,38 @@ const state = {
   health: null,
   projects: [],
   currentProject: null,
+  historyProject: null,
+  historyRevision: null,
+  activeStage: null,
+  activeStageProjectId: null,
+  pendingConfiguration: null,
   pollTimer: null,
   toastTimer: null,
+  interruptingProjectId: null,
+  mermaidInitialized: false,
+  diagramSequence: 0,
 };
 
 const terminalStatuses = new Set(["completed", "needs_attention", "failed"]);
 const stages = ["scoping", "searching", "synthesizing", "designing", "drafting", "reviewing", "revising"];
 const stageLabels = {
   scoping: "正在收敛研究问题",
-  searching: "正在跨源检索论文",
-  synthesizing: "正在建立证据账本",
-  designing: "正在设计研究方法",
+  searching: "正在搜集研究材料",
+  synthesizing: "正在建立证据与学习记录",
+  designing: "正在设计方法与图表",
   drafting: "正在起草研究稿件",
   reviewing: "正在执行质量检查",
-  revising: "正在辅助修订稿件",
+  revising: "正在汇总修订与交付",
   completed: "工作流已完成",
+};
+const stageWorkspaceCopy = {
+  scoping: ["范围与配置", "确认研究边界、交付要求与核心贡献，确认后再重建后续内容。"],
+  searching: ["研究材料", "补充资料并调整检索重点；固定论文源与模型补充候选会统一去重。"],
+  synthesizing: ["证据与学习", "逐条检查论文、本地文件、证据摘要、定位信息与学习边界。"],
+  designing: ["方法与图表", "修改研究设计以及图表构成、数据要求和表达边界，不把计划写成结果。"],
+  drafting: ["研究稿件", "直接查看 Markdown 论文版式与 LaTeX 原文本，并按本阶段要求更新。"],
+  reviewing: ["质量检查", "调整审阅重点并重新检查结构、引用、方法、图表和结果来源。"],
+  revising: ["总览与交付", "汇总研究范围、材料、证据、图表、稿件与检查结果，再准备 Markdown/LaTeX 交付。"],
 };
 const statusLabels = {
   created: "待运行",
@@ -43,12 +60,14 @@ const searchFieldHints = {
 };
 const artifactLabels = {
   "learning-plan.json": "文献学习计划",
-  "contribution-options.json": "贡献方向候选",
+  "contribution-blueprint.json": "研究贡献方案",
   "papers.json": "检索论文清单",
   "evidence.json": "证据账本",
   "research-design.json": "研究设计",
   "figure-story.json": "图件故事板",
+  "table-story.json": "表格设计说明",
   "paper-draft.md": "论文初稿",
+  "paper-draft.tex": "论文初稿 LaTeX 原文",
   "review.json": "初审报告",
   "paper.md": "修订论文",
   "final-review.json": "最终质量检查报告",
@@ -104,7 +123,11 @@ function setBusy(button, busy, label) {
 function showView(name) {
   document.querySelectorAll(".view").forEach((node) => node.classList.toggle("is-active", node.id === `${name}View`));
   document.querySelectorAll(".nav-button").forEach((node) => node.classList.toggle("is-active", node.dataset.view === name));
-  element("pageTitle").textContent = name === "projects" ? "研究工作台" : "跨源论文检索";
+  element("pageTitle").textContent = name === "workspace" ? "当前研究项目" : "研究工作台";
+  if (name === "workspace") {
+    element("workspaceEmpty").hidden = Boolean(state.currentProject);
+    element("projectWorkspace").hidden = !state.currentProject;
+  }
 }
 
 function renderSourceOptions(containerId) {
@@ -112,6 +135,7 @@ function renderSourceOptions(containerId) {
   container.replaceChildren();
   const sources = state.health?.sources || [];
   for (const source of sources) {
+    if (source.name === "ieee" || source.name === "ieee_metadata") continue;
     const label = document.createElement("label");
     label.className = "source-option";
     const input = document.createElement("input");
@@ -169,32 +193,35 @@ function selectedSources(containerId) {
 async function loadHealth() {
   const health = await api("/health");
   state.health = health;
-  element("brandVersion").textContent = "v0.2.1";
+  element("brandVersion").textContent = `v${health.version || "0.3.0"}`;
   const status = element("systemStatus");
   status.classList.add("is-on");
   status.lastChild.textContent = " 服务已连接";
   const model = element("modelBadge");
-  model.classList.toggle("is-on", health.model_configured);
-  model.lastChild.textContent = health.model_configured
-    ? ` 模型已配置 · ${health.model_name}`
-    : " 未配置模型 · 诚实降级";
+  if (model) {
+    model.classList.toggle("is-on", health.model_configured);
+    model.lastChild.textContent = health.model_configured
+      ? ` 模型已配置 · ${health.model_name}`
+      : " 未配置模型 · 诚实降级";
+  }
   const sourceStatus = element("sourceStatus");
-  sourceStatus.replaceChildren();
-  for (const source of health.sources) {
-    const chip = document.createElement("span");
-    chip.className = `source-chip${source.available ? "" : " is-off"}`;
-    const sourceLabel = {
-      semantic_scholar: "Semantic Scholar",
-      ieee_metadata: "IEEE 书目元数据",
-      ieee: "IEEE Xplore",
-    }[source.name] || source.name;
-    chip.textContent = source.name === "ieee" ? `${sourceLabel} · ${source.status}` : sourceLabel;
-    chip.title = `${source.access} · ${source.status}`;
-    sourceStatus.append(chip);
+  if (sourceStatus) {
+    sourceStatus.replaceChildren();
+    for (const source of health.sources) {
+      if (source.name === "ieee" || source.name === "ieee_metadata") continue;
+      const chip = document.createElement("span");
+      chip.className = `source-chip${source.available ? "" : " is-off"}`;
+      const sourceLabel = {
+        semantic_scholar: "Semantic Scholar",
+        ieee_metadata: "IEEE 书目元数据",
+        ieee: "IEEE Xplore",
+      }[source.name] || source.name;
+      chip.textContent = source.name === "ieee" ? `${sourceLabel} · ${source.status}` : sourceLabel;
+      chip.title = `${source.access} · ${source.status}`;
+      sourceStatus.append(chip);
+    }
   }
   renderSourceOptions("createSources");
-  renderSourceOptions("searchSources");
-  renderVenueOptions();
 }
 
 async function loadProjects() {
@@ -253,7 +280,7 @@ function collapseIdeaOnDemand() {
   input.style.removeProperty("height");
 }
 
-function collectConfiguration(prefix = "", formatName = "deliveryFormats") {
+function collectConfiguration(prefix = "") {
   const read = (name) => element(configurationFieldId(prefix, name));
   const referenceMode = read("ReferenceCountMode").value;
   const countValue = read("ReferenceCount").value;
@@ -270,7 +297,7 @@ function collectConfiguration(prefix = "", formatName = "deliveryFormats") {
     reference_count_mode: referenceMode,
     reference_count: referenceMode === "custom" && countValue ? Number(countValue) : null,
     mechanism_figure: read("MechanismFigure").value,
-    formats: [...document.querySelectorAll(`input[name="${formatName}"]:checked`)].map((node) => node.value),
+    formats: ["md", "tex"],
   };
 }
 
@@ -309,13 +336,15 @@ async function createProject(event) {
         idea,
         sources: selectedSources("createSources"),
         run_now: false,
-        guided: element("guidedMode").checked,
+        guided: document.querySelector('input[name="executionMode"]:checked')?.value !== "automatic",
         configuration: collectConfiguration(),
       }),
     });
     state.currentProject = project;
+    state.historyProject = null;
+    state.historyRevision = null;
+    showView("workspace");
     renderProject(project);
-    element("historyList").replaceChildren();
     element("projectWorkspace").scrollIntoView({ behavior: "smooth", block: "start" });
     const sourceFiles = [...element("sourceFiles").files];
     const resultFiles = [...element("resultFiles").files];
@@ -344,10 +373,12 @@ async function createProject(event) {
 }
 
 async function openProject(projectId) {
-  showView("projects");
+  showView("workspace");
   try {
     const project = await api(`/api/projects/${projectId}`);
     state.currentProject = project;
+    state.historyProject = null;
+    state.historyRevision = null;
     renderProject(project);
     await loadProjects();
     element("projectWorkspace").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -361,8 +392,16 @@ async function openProject(projectId) {
 async function refreshCurrentProject() {
   if (!state.currentProject) return;
   const project = await api(`/api/projects/${state.currentProject.id}`);
+  if (project.is_active !== true && state.interruptingProjectId === project.id) {
+    state.interruptingProjectId = null;
+  }
   state.currentProject = project;
-  renderProject(project);
+  if (state.historyProject) {
+    state.historyProject.history = project.history || [];
+    renderHistoryTimeline(project.history || []);
+  } else {
+    renderProject(project);
+  }
   if ((terminalStatuses.has(project.status) && project.is_active !== true) || (project.status === "running" && project.is_active === false)) {
     stopPolling();
     await loadProjects();
@@ -385,60 +424,103 @@ function stopPolling() {
 }
 
 function renderProject(project) {
+  element("workspaceEmpty").hidden = true;
   const workspace = element("projectWorkspace");
   workspace.hidden = false;
+  const isHistory = project.is_history === true;
+  const displayStage = isHistory && stages.includes(project.history_stage)
+    ? project.history_stage
+    : project.stage;
   element("projectTitle").textContent = project.title || project.idea;
-  element("projectMeta").textContent = `项目 ${project.id} · 创建于 ${formatDate(project.created_at)}`;
-  const isActive = project.is_active === true || (project.status === "running" && project.is_active !== false);
-  const isInterrupted = project.status === "running" && !isActive;
+  element("projectMeta").textContent = isHistory
+    ? `历史版本 · ${formatDate(project.history_created_at)} · ${project.history_reason}`
+    : `项目 ${project.id} · 创建于 ${formatDate(project.created_at)}`;
+  const isActive = !isHistory
+    && (project.is_active === true || (project.status === "running" && project.is_active !== false));
+  const isInterrupted = project.state?.interrupted === true
+    || (project.status === "running" && !isActive);
   const status = element("projectStatus");
-  status.textContent = isInterrupted ? "已中断" : statusLabels[project.status] || project.status;
+  status.textContent = isHistory
+    ? `历史 · ${stageWorkspaceCopy[displayStage]?.[0] || displayStage}`
+    : isInterrupted ? "已中断" : statusLabels[project.status] || project.status;
   status.className = `status-pill${isActive ? " is-running" : project.status === "failed" || project.status === "needs_attention" || isInterrupted ? " is-error" : ""}`;
 
   const isTerminal = terminalStatuses.has(project.status);
-  const currentIndex = project.stage === "completed" ? stages.length : Math.max(0, stages.indexOf(project.stage));
-  const finishedStages = project.stage === "completed" ? stages.length : currentIndex;
+  const currentIndex = displayStage === "completed" ? stages.length : Math.max(0, stages.indexOf(displayStage));
+  if (state.activeStageProjectId !== project.id || !stages.includes(state.activeStage)) {
+    state.activeStageProjectId = project.id;
+    state.activeStage = displayStage === "completed" ? "revising" : displayStage;
+    state.pendingConfiguration = null;
+  }
+  const checkpoint = isHistory ? null : project.state?.pending_checkpoint;
+  if (checkpoint && stages.includes(checkpoint)) state.activeStage = checkpoint;
+  const finishedStages = isHistory
+    ? Math.min(stages.length, stages.indexOf(state.activeStage) + 1)
+    : project.stage === "completed" ? stages.length : currentIndex;
   const percent = project.status === "created" ? 0 : Math.round((Math.max(finishedStages, project.status === "running" ? currentIndex + 0.35 : finishedStages) / stages.length) * 100);
   element("progressFill").style.width = `${Math.min(100, percent)}%`;
   element("progressPercent").textContent = `${Math.min(100, percent)}%`;
-  element("stageText").textContent = project.error || (isInterrupted ? "上次运行已中断，可从断点继续" : stageLabels[project.stage] || "准备开始");
+  element("stageText").textContent = isHistory
+    ? `正在查看：${project.history_reason}`
+    : project.error || (isInterrupted ? "上次运行已中断，可从断点继续" : stageLabels[project.stage] || "准备开始");
   document.querySelectorAll("#stageList li").forEach((node, index) => {
-    node.classList.toggle("is-done", index < finishedStages || project.stage === "completed");
-    node.classList.toggle("is-current", project.status === "running" && index === currentIndex);
+    node.classList.toggle("is-done", index < finishedStages || displayStage === "completed");
+    node.classList.toggle("is-current", !isHistory && project.status === "running" && index === currentIndex);
+    node.classList.toggle("is-selected", node.dataset.stage === state.activeStage);
+    node.querySelector("button")?.setAttribute("aria-selected", String(node.dataset.stage === state.activeStage));
   });
-
   const runButton = element("runProject");
+  const interruptButton = element("interruptProject");
   const needsSearchConfirmation = project.state?.search_confirmation_required === true;
-  const checkpoint = project.state?.pending_checkpoint;
+  const isInterrupting = state.interruptingProjectId === project.id;
+  interruptButton.hidden = isHistory || !isActive;
+  interruptButton.disabled = !isActive || isInterrupting;
+  interruptButton.textContent = isInterrupting ? "正在中断…" : "中断运行";
   runButton.disabled = isActive;
-  runButton.hidden = isActive || needsSearchConfirmation || Boolean(checkpoint);
+  runButton.hidden = isHistory || isActive || needsSearchConfirmation || Boolean(checkpoint);
   runButton.textContent = project.status === "created" ? "开始运行" : "从头重新运行";
-  element("resumeProject").hidden = isActive || needsSearchConfirmation || Boolean(checkpoint)
+  element("resumeProject").hidden = isHistory || isActive || needsSearchConfirmation || Boolean(checkpoint)
     || project.stage === "completed" || project.status === "created";
-  element("approveStage").hidden = isActive || !checkpoint;
-  element("rerunStageButton").disabled = isActive;
-  const rerunStage = element("rerunStage");
-  const latestRerunIndex = checkpoint ? stages.indexOf(checkpoint) : currentIndex;
-  for (const option of rerunStage.options) {
-    option.disabled = stages.indexOf(option.value) > latestRerunIndex;
-  }
-  const selectionContext = `${project.id}:${checkpoint || ""}`;
-  if (rerunStage.dataset.context !== selectionContext || rerunStage.selectedOptions[0]?.disabled) {
-    rerunStage.value = checkpoint || (project.stage === "completed" ? "designing" : project.stage);
-    rerunStage.dataset.context = selectionContext;
-  }
+  element("approveStage").hidden = isHistory || isActive || !checkpoint;
   const checkpointPreview = element("checkpointPreview");
   element("checkpointPanel").hidden = !checkpoint;
-  const key = { scoping: "spec", synthesizing: "evidence", designing: "design" }[checkpoint];
-  checkpointPreview.textContent = key ? JSON.stringify(project.state[key], null, 2)
-    : "请在研究制品中预览 paper-draft.md，确认初稿后继续质量检查。";
-  element("uploadMore").disabled = project.status === "running";
-  element("moreSourceFiles").disabled = project.status === "running";
-  element("moreResultFiles").disabled = project.status === "running";
-  element("deleteProject").disabled = isActive;
-  element("deleteProject").title = isActive ? "项目运行中，暂时不能删除" : "永久删除项目及全部制品";
+  const checkpointPreviewValue = {
+    scoping: project.state?.spec,
+    searching: {
+      queries: project.state?.search_queries || [],
+      papers: (project.state?.papers || []).slice(0, 8).map((paper) => ({
+        title: paper.title,
+        authors: paper.authors,
+        year: paper.year,
+        sources: paper.sources,
+      })),
+    },
+    synthesizing: project.state?.evidence,
+    designing: {
+      design: project.state?.design,
+      figure_story: project.state?.figure_story,
+      table_story: project.state?.table_story,
+    },
+    drafting: {
+      artifacts: project.artifacts?.filter((name) => name.includes("paper-draft")) || [],
+      note: "请在下方研究稿件原文区域预览 Markdown 与 LaTeX。",
+    },
+    reviewing: project.state?.review,
+    revising: project.state?.final_review || project.state?.delivery_manifest,
+  }[checkpoint];
+  checkpointPreview.textContent = checkpoint
+    ? JSON.stringify(checkpointPreviewValue || { note: "本阶段已完成，请检查下方工作区。" }, null, 2)
+    : "暂无待确认阶段。";
+  element("uploadMore").disabled = isHistory || project.status === "running";
+  element("moreSourceFiles").disabled = isHistory || project.status === "running";
+  element("moreResultFiles").disabled = isHistory || project.status === "running";
+  element("refreshProject").disabled = isHistory;
+  element("deleteProject").disabled = isHistory || isActive;
+  element("deleteProject").title = isHistory
+    ? "历史版本为只读，请先返回当前版本"
+    : isActive ? "项目运行中，暂时不能删除" : "永久删除项目及全部制品";
   const confirmation = element("searchConfirmation");
-  confirmation.hidden = !needsSearchConfirmation;
+  confirmation.hidden = isHistory || !needsSearchConfirmation;
   const queryList = element("pendingSearchQueries");
   queryList.replaceChildren();
   if (needsSearchConfirmation) {
@@ -452,23 +534,89 @@ function renderProject(project) {
   const warnings = project.state?.search_plan_warnings || [];
   warning.hidden = !needsSearchConfirmation || !warnings.length;
   warning.textContent = warnings.join(" ");
+  renderHistoryTimeline(state.currentProject?.history || project.history || []);
+  const historyPanel = element("historyPanel");
+  const returnButton = element("returnCurrentVersion");
+  const historyNotice = element("historyViewNotice");
+  historyPanel.open = isHistory || historyPanel.open;
+  returnButton.hidden = !isHistory;
+  historyNotice.hidden = !isHistory;
+  historyNotice.textContent = isHistory
+    ? `只读历史版本：${project.history_reason}。阶段内容和制品均来自该版本。`
+    : "";
   renderArtifacts(project);
   renderReview(project);
-  renderWorkspaceV2(project, isActive || isInterrupted);
+  renderWorkspaceV2(project, isActive || isInterrupted || isHistory);
+  renderWorkspaceStage(project, isActive || isInterrupted || isHistory);
+}
+
+function renderWorkspaceStage(project, isActive) {
+  const activeStage = state.activeStage || "scoping";
+  const [title, description] = stageWorkspaceCopy[activeStage];
+  element("activeStageTitle").textContent = title;
+  element("activeStageDescription").textContent = description;
+  const grid = document.querySelector(".v2-workbench-grid");
+  grid.dataset.activeStage = activeStage;
+  grid.querySelectorAll("[data-stage-panel]").forEach((panel) => {
+    panel.hidden = panel.dataset.stagePanel !== activeStage;
+  });
+
+  const pending = project.state?.pending_stage_edits?.[activeStage];
+  const confirmed = project.state?.stage_instructions?.[activeStage];
+  const editor = element("stageEditText");
+  const editContext = `${project.id}:${activeStage}:${pending?.updated_at || ""}:${confirmed || ""}`;
+  if (editor.dataset.context !== editContext) {
+    editor.value = pending?.text || confirmed || "";
+    editor.dataset.context = editContext;
+  }
+  const scopeFields = element("scopeEditFields");
+  const scopeSpec = project.state?.spec || {};
+  const scopeTitle = element("stageScopeTitle");
+  const scopeKeywords = element("stageScopeKeywords");
+  const scopePending = activeStage === "scoping" ? pending : null;
+  scopeFields.hidden = activeStage !== "scoping";
+  const scopeContext = `${project.id}:scoping:${scopePending?.updated_at || ""}:${scopeSpec.title || ""}:${(scopeSpec.keywords || []).join("|")}`;
+  if (scopeFields.dataset.context !== scopeContext) {
+    scopeTitle.value = scopePending?.title ?? scopeSpec.title ?? "";
+    scopeKeywords.value = (scopePending?.keywords ?? scopeSpec.keywords ?? []).join(", ");
+    scopeFields.dataset.context = scopeContext;
+  }
+  const currentIndex = project.stage === "completed" ? stages.length - 1 : stages.indexOf(project.stage);
+  const canConfirm = stages.indexOf(activeStage) <= Math.max(0, currentIndex);
+  editor.disabled = isActive;
+  scopeTitle.disabled = isActive || activeStage !== "scoping";
+  scopeKeywords.disabled = isActive || activeStage !== "scoping";
+  element("saveStageEdit").disabled = isActive;
+  element("confirmStageEdit").disabled = isActive || !pending || !canConfirm;
+  element("stageEditStatus").textContent = project.is_history
+    ? "历史版本为只读，返回当前版本后可继续编辑"
+    : pending
+      ? `修改草稿已保存于 ${formatDate(pending.updated_at)}，尚未影响现有结果`
+      : confirmed
+        ? "已应用上一条要求；继续编辑可形成新的修改草稿"
+        : canConfirm
+          ? "尚未保存修改草稿"
+          : "该阶段尚未到达，可先查看，完成上游后再确认修改";
+}
+
+function selectWorkspaceStage(stage) {
+  if (!state.currentProject || !stages.includes(stage)) return;
+  state.activeStage = stage;
+  renderProject(state.historyProject || state.currentProject);
 }
 
 function renderWorkspaceV2(project, isActive) {
   renderConfiguration(project, isActive);
   renderMaterials(project);
-  renderContributionOptions(project, isActive);
+  renderContributionOptions(project);
   renderEvidenceSummary(project);
-  renderFigureStory(project, isActive);
-  renderDelivery(project, isActive);
-  renderFeedback(project, isActive);
+  renderFigureStory(project);
+  renderProjectOverview(project);
 }
 
 function renderConfiguration(project, isActive) {
   const config = project.state?.configuration || {};
+  const formConfig = state.pendingConfiguration || config;
   const container = element("configurationSummary");
   container.replaceChildren();
   const rows = [
@@ -498,13 +646,14 @@ function renderConfiguration(project, isActive) {
   };
   for (const [field, key] of Object.entries(fieldMap)) {
     const input = element(`project${field}`);
-    input.value = config[key] ?? "";
+    input.value = formConfig[key] ?? "";
     input.disabled = isActive;
   }
-  document.querySelectorAll('input[name="projectDeliveryFormats"]').forEach((input) => {
-    input.checked = (config.formats || []).includes(input.value);
-    input.disabled = isActive;
-  });
+  if (state.pendingConfiguration) {
+    const button = element("saveConfiguration");
+    button.textContent = "确认配置并更新后续";
+    button.dataset.originalLabel = "确认配置并更新后续";
+  }
   element("toggleConfigurationEditor").disabled = isActive;
   element("saveConfiguration").disabled = isActive;
   updateReferenceCountState("project");
@@ -540,33 +689,83 @@ function renderMaterials(project) {
   }
 }
 
-function renderContributionOptions(project, isActive) {
+function artifactActionRow(project, name) {
+  const row = document.createElement("div");
+  row.className = "artifact-item";
+  const label = document.createElement("span");
+  label.textContent = artifactLabels[name] || name;
+  const actions = document.createElement("div");
+  actions.className = "artifact-actions";
+  if (name.endsWith(".md") || name.endsWith(".json") || name.endsWith(".tex")) {
+    const preview = document.createElement("button");
+    preview.type = "button";
+    preview.textContent = "预览";
+    preview.addEventListener("click", () => previewArtifact(project.id, name, project.history_revision));
+    actions.append(preview);
+  }
+  const download = document.createElement("a");
+  download.href = project.history_revision
+    ? `/api/projects/${project.id}/history/${project.history_revision}/${encodeURIComponent(name)}`
+    : `/api/projects/${project.id}/artifacts/${encodeURIComponent(name)}`;
+  download.textContent = "下载";
+  download.setAttribute("download", name);
+  actions.append(download);
+  row.append(label, actions);
+  return row;
+}
+
+function textList(label, values) {
+  const block = document.createElement("div");
+  block.className = "labeled-list";
+  const heading = document.createElement("h6");
+  heading.textContent = label;
+  const list = document.createElement("ul");
+  for (const value of values) {
+    const item = document.createElement("li");
+    item.textContent = value;
+    list.append(item);
+  }
+  block.append(heading, list);
+  return block;
+}
+
+function labeledParagraph(label, value, className = "") {
+  const block = document.createElement("div");
+  block.className = `labeled-paragraph ${className}`.trim();
+  const heading = document.createElement("h6");
+  const copy = document.createElement("p");
+  heading.textContent = label;
+  copy.textContent = value || "待补充";
+  block.append(heading, copy);
+  return block;
+}
+
+function renderContributionOptions(project) {
   const container = element("contributionOptions");
   container.replaceChildren();
-  const options = project.state?.contribution_options || [];
-  if (!options.length) {
+  const spec = project.state?.spec;
+  const blueprint = project.state?.contribution_blueprint || {};
+  if (!spec) {
     const empty = document.createElement("p");
     empty.className = "muted";
-    empty.textContent = "完成范围界定后生成三个有明确取舍的贡献方向。";
+    empty.textContent = "完成范围界定后显示一份可修改的研究贡献方案。";
     container.append(empty);
     return;
   }
-  for (const option of options) {
+  const sections = [
+    ["研究问题", blueprint.research_question || spec.question],
+    ["核心贡献", blueprint.intended_contribution || spec.contribution],
+    ["注意边界", (blueprint.boundaries || []).join(" ")],
+    ["方法与论证框架", (blueprint.framework || []).join(" ")],
+  ];
+  for (const [title, value] of sections) {
     const card = document.createElement("article");
-    card.className = `choice-card${project.state?.selected_contribution === option.id ? " is-selected" : ""}`;
+    card.className = "contribution-item";
     const heading = document.createElement("h5");
-    const summary = document.createElement("p");
-    const tradeoff = document.createElement("small");
-    const button = document.createElement("button");
-    heading.textContent = option.title;
-    summary.textContent = option.summary;
-    tradeoff.textContent = option.tradeoff;
-    button.type = "button";
-    button.className = "secondary-button";
-    button.textContent = project.state?.selected_contribution === option.id ? "当前方向" : "选择此方向";
-    button.disabled = isActive || project.state?.selected_contribution === option.id;
-    button.addEventListener("click", () => saveDecision("contribution", option.id, "selected", ""));
-    card.append(heading, summary, tradeoff, button);
+    const copy = document.createElement("p");
+    heading.textContent = title;
+    copy.textContent = value || "等待本阶段生成；可在上方写入修改要求后确认更新。";
+    card.append(heading, copy);
     container.append(card);
   }
 }
@@ -575,130 +774,330 @@ function renderEvidenceSummary(project) {
   const container = element("evidenceSummary");
   container.replaceChildren();
   const learning = project.state?.learning_plan;
-  const papers = project.state?.papers || [];
   const evidence = project.state?.evidence || [];
   const failures = project.state?.source_failures || [];
-  const metrics = [
-    ["候选论文", papers.length],
-    ["证据条目", evidence.length],
-    ["来源降级", failures.length],
-    ["目标场景", learning?.target_name || "中性格式"],
-  ];
-  for (const [label, value] of metrics) {
-    const item = document.createElement("div");
-    const number = document.createElement("strong");
-    const caption = document.createElement("span");
-    number.textContent = value;
-    caption.textContent = label;
-    item.append(number, caption);
-    container.append(item);
+  const artifacts = new Set(project.artifacts || []);
+
+  const fileSection = document.createElement("section");
+  fileSection.className = "evidence-section";
+  const fileTitle = document.createElement("h5");
+  fileTitle.textContent = "阶段文件";
+  fileSection.append(fileTitle);
+  const files = ["learning-plan.json", "papers.json", "evidence.json"].filter((name) => artifacts.has(name));
+  if (!files.length) {
+    const pending = document.createElement("p");
+    pending.className = "muted";
+    pending.textContent = "完成范围、检索与证据综合后，这里会出现可预览和下载的阶段文件。";
+    fileSection.append(pending);
   }
-  if (learning?.limits?.length) {
-    const note = document.createElement("p");
-    note.textContent = learning.limits[0];
-    container.append(note);
+  for (const name of files) fileSection.append(artifactActionRow(project, name));
+  container.append(fileSection);
+
+  if (learning) {
+    const plan = document.createElement("section");
+    plan.className = "evidence-section";
+    const title = document.createElement("h5");
+    title.textContent = "学习计划";
+    const summary = document.createElement("p");
+    summary.textContent = learning.target_name
+      ? `同方向目标 ${learning.same_field_target} 篇，目标场景“${learning.target_name}”目标 ${learning.target_venue_target} 篇。`
+      : `同方向目标 ${learning.same_field_target} 篇；未指定目标期刊或会议。`;
+    plan.append(title, summary);
+    if (learning.topic_queries?.length) {
+      const queries = document.createElement("div");
+      queries.className = "evidence-tags";
+      for (const query of learning.topic_queries) {
+        const tag = document.createElement("span");
+        tag.textContent = query;
+        queries.append(tag);
+      }
+      plan.append(queries);
+    }
+    for (const limit of learning.limits || []) {
+      const note = document.createElement("small");
+      note.textContent = limit;
+      plan.append(note);
+    }
+    container.append(plan);
+  }
+
+  const documents = project.state?.documents || [];
+  if (documents.length) {
+    const local = document.createElement("section");
+    local.className = "evidence-section";
+    const title = document.createElement("h5");
+    title.textContent = "本地材料文件";
+    local.append(title);
+    for (const document of documents) {
+      const row = document.createElement("div");
+      row.className = "evidence-file-row";
+      const name = document.createElement("strong");
+      const detail = document.createElement("span");
+      name.textContent = document.name;
+      detail.textContent = `${document.role === "results" ? "真实结果" : "参考资料"} · ${String(document.kind || "file").toUpperCase()} · ${document.excerpt || "等待提取内容"}`;
+      row.append(name, detail);
+      local.append(row);
+    }
+    container.append(local);
+  }
+
+  const ledger = document.createElement("section");
+  ledger.className = "evidence-section evidence-records";
+  const ledgerTitle = document.createElement("h5");
+  ledgerTitle.textContent = `证据账本${evidence.length ? ` · ${evidence.length} 条` : ""}`;
+  ledger.append(ledgerTitle);
+  if (!evidence.length) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "尚无证据条目；完成检索或上传材料后生成。";
+    ledger.append(empty);
+  }
+  for (const record of evidence) {
+    const details = document.createElement("details");
+    details.className = "evidence-entry";
+    const heading = document.createElement("summary");
+    heading.textContent = `${record.cite_key} · ${record.paper_title}`;
+    const summary = document.createElement("p");
+    summary.textContent = record.summary;
+    details.append(heading, summary);
+    if (record.supports?.length) details.append(textList("支持内容", record.supports));
+    if (record.caveats?.length) details.append(textList("核验与限制", record.caveats));
+    const locator = safeExternalUrl(record.source_locator);
+    if (locator) {
+      const link = document.createElement("a");
+      link.href = locator;
+      link.target = "_blank";
+      link.rel = "noreferrer";
+      link.textContent = "打开来源定位";
+      details.append(link);
+    } else if (record.source_locator) {
+      const location = document.createElement("code");
+      location.textContent = `本地定位：${record.source_locator}`;
+      details.append(location);
+    }
+    ledger.append(details);
+  }
+  container.append(ledger);
+
+  if (failures.length) {
+    const failureSection = document.createElement("section");
+    failureSection.className = "evidence-section source-failures";
+    const title = document.createElement("h5");
+    title.textContent = "未完成的来源";
+    failureSection.append(title);
+    for (const failure of failures) {
+      const item = document.createElement("p");
+      item.textContent = `${failure.source}：${failure.reason} ${failure.suggestion || ""}`.trim();
+      failureSection.append(item);
+    }
+    container.append(failureSection);
   }
 }
 
-function renderFigureStory(project, isActive) {
+function mermaidLabel(value, fallback) {
+  const label = String(value || fallback)
+    .replace(/["`\n\r;]/g, " ")
+    .replace(/[\[\](){}`<>|#]/g, " ")
+    .replace(/(?:-->|---|-.->|==>)/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return (label || fallback).slice(0, 56);
+}
+
+function figureMermaid(entry) {
+  const title = mermaidLabel(entry.title, "研究流程");
+  const question = mermaidLabel(entry.composition?.[0], "研究问题与边界");
+  if (entry.kind === "mechanism") {
+    return `flowchart LR\n  A["输入与证据"] --> B["处理模块"]\n  B --> C["输出与指标"]\n  C -.-> D["验证反馈"]\n  D -.-> B\n  T["${title}"]:::title -.-> A\n  classDef title fill:#edf5f0,stroke:#2f6550,color:#183b31;`;
+  }
+  if (entry.kind === "results") {
+    return `flowchart LR\n  A["真实结果"] --> B["主要指标"]\n  B --> C["对照与区间"]\n  C --> D["稳健性检查"]\n  Q["${title}"]:::title -.-> A\n  classDef title fill:#f2e3d1,stroke:#b86a2f,color:#6c3e20;`;
+  }
+  return `flowchart LR\n  A["${question}"] --> B["证据与纳入边界"]\n  B --> C["研究方法"]\n  C --> D["可证伪结论"]\n  D -.-> E["失败条件 / 待验证"]\n  T["${title}"]:::title -.-> A\n  classDef title fill:#edf5f0,stroke:#2f6550,color:#183b31;`;
+}
+
+function renderMermaidPreview(container, source) {
+  container.className = "diagram-preview";
+  container.dataset.source = source;
+  container.textContent = "正在绘制流程图…";
+  if (!window.mermaid) {
+    container.textContent = source;
+    container.classList.add("is-fallback");
+    return;
+  }
+  if (!state.mermaidInitialized) {
+    window.mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: "strict",
+      theme: "base",
+      themeVariables: {
+        fontFamily: "ui-sans-serif, system-ui, sans-serif",
+        primaryColor: "#edf5f0",
+        primaryTextColor: "#183b31",
+        primaryBorderColor: "#6d9b84",
+        lineColor: "#6c8177",
+      },
+    });
+    state.mermaidInitialized = true;
+  }
+  const renderId = `scholaros-diagram-${++state.diagramSequence}`;
+  window.mermaid.render(renderId, source).then(({ svg }) => {
+    if (!container.isConnected || container.dataset.source !== source) return;
+    container.innerHTML = svg;
+  }).catch(() => {
+    if (!container.isConnected || container.dataset.source !== source) return;
+    container.textContent = source;
+    container.classList.add("is-fallback");
+  });
+}
+
+function buildTablePreview(entry) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "table-preview";
+  const table = document.createElement("table");
+  table.setAttribute("aria-label", entry.title || "表格预览");
+  const head = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  const columns = Array.isArray(entry.columns) && entry.columns.length
+    ? entry.columns
+    : ["字段", "内容", "核验状态"];
+  for (const column of columns) {
+    const cell = document.createElement("th");
+    cell.textContent = String(column);
+    headRow.append(cell);
+  }
+  head.append(headRow);
+  table.append(head);
+
+  const body = document.createElement("tbody");
+  const sourceRows = Array.isArray(entry.rows) && entry.rows.length
+    ? entry.rows
+    : [entry.rows || "待按研究材料填写"];
+  for (const rowValue of sourceRows.slice(0, 4)) {
+    const row = document.createElement("tr");
+    const values = Array.isArray(rowValue) ? rowValue : [rowValue];
+    columns.forEach((_, index) => {
+      const cell = document.createElement("td");
+      cell.textContent = String(values[index] ?? (index === 0 ? "待填写" : "待核验"));
+      row.append(cell);
+    });
+    body.append(row);
+  }
+  table.append(body);
+  wrapper.append(table);
+  const hint = document.createElement("small");
+  hint.textContent = Array.isArray(entry.rows)
+    ? "当前仅展示规划字段；真实数据需由研究材料填充。"
+    : "当前为结构预览；执行研究后再填入真实记录。";
+  wrapper.append(hint);
+  return wrapper;
+}
+
+function renderFigureStory(project) {
   const container = element("figureStory");
   container.replaceChildren();
   const figures = project.state?.figure_story || [];
-  if (!figures.length) {
+  const tables = project.state?.table_story || [];
+  if (!figures.length && !tables.length) {
     const empty = document.createElement("p");
     empty.className = "muted";
-    empty.textContent = "方法设计完成后生成图件职责、证据边界和媒体占位；图片与视频可以稍后补充。";
+    empty.textContent = "方法设计完成后生成图与表的用途、构成、视觉编码、数据要求、图注和边界。";
     container.append(empty);
     return;
   }
-  for (const figure of figures) {
-    const card = document.createElement("article");
-    card.className = "figure-card";
-    const top = document.createElement("div");
-    const heading = document.createElement("h5");
-    const stateBadge = document.createElement("span");
-    heading.textContent = `${figure.id.replace("figure-", "图 ")} · ${figure.title}`;
-    stateBadge.textContent = figure.status === "waiting_for_results" ? "等待真实结果" : "已规划";
-    top.append(heading, stateBadge);
-    const job = document.createElement("p");
-    job.textContent = figure.job;
-    const controls = document.createElement("div");
-    controls.className = "figure-controls";
-    const select = document.createElement("select");
-    for (const [value, label] of [["keep", "保留"], ["revise", "修改"], ["omit", "省略"]]) {
-      const option = document.createElement("option");
-      option.value = value;
-      option.textContent = label;
-      select.append(option);
+  const groups = [["图件规划", figures, "图"], ["表格规划", tables, "表"]];
+  for (const [groupTitle, entries, prefix] of groups) {
+    if (!entries.length) continue;
+    const section = document.createElement("section");
+    const title = document.createElement("h5");
+    title.className = "story-group-title";
+    title.textContent = groupTitle;
+    const grid = document.createElement("div");
+    grid.className = "story-card-grid";
+    section.append(title, grid);
+    for (const entry of entries) {
+      const card = document.createElement("article");
+      card.className = "figure-card";
+      const top = document.createElement("div");
+      const heading = document.createElement("h5");
+      const stateBadge = document.createElement("span");
+      heading.textContent = `${entry.id.replace(`${prefix === "图" ? "figure" : "table"}-`, `${prefix} `)} · ${entry.title}`;
+      stateBadge.textContent = entry.status === "waiting_for_results" ? "等待真实结果" : "详细规划";
+      top.append(heading, stateBadge);
+      const job = document.createElement("p");
+      job.textContent = entry.job || entry.purpose;
+      card.append(top, job);
+      if (prefix === "图") {
+        const diagram = document.createElement("div");
+        renderMermaidPreview(diagram, figureMermaid(entry));
+        card.append(diagram);
+      } else {
+        card.append(buildTablePreview(entry));
+      }
+      const composition = entry.composition || entry.columns;
+      if (composition?.length) card.append(textList(prefix === "图" ? "构成" : "字段", composition));
+      if (entry.visual_encoding?.length) card.append(textList("视觉编码", entry.visual_encoding));
+      if (entry.rows) card.append(textList("行设计", Array.isArray(entry.rows) ? entry.rows : [entry.rows]));
+      card.append(labeledParagraph("所需数据", entry.data_requirements));
+      card.append(labeledParagraph(prefix === "图" ? "图注草案" : "表注草案", entry.caption));
+      card.append(labeledParagraph("表达边界", entry.boundary, "is-warning"));
+      grid.append(card);
     }
-    select.value = figure.decision || "keep";
-    const comment = document.createElement("input");
-    comment.placeholder = "对构图、内容或后续素材的意见";
-    comment.maxLength = 5000;
-    comment.value = figure.comment || "";
-    const save = document.createElement("button");
-    save.type = "button";
-    save.className = "secondary-button";
-    save.textContent = figure.decision ? "更新选择" : "保存选择";
-    save.disabled = isActive;
-    save.addEventListener("click", () => saveDecision("figure", figure.id, select.value, comment.value));
-    select.disabled = isActive;
-    comment.disabled = isActive;
-    controls.append(select, comment, save);
-    card.append(top, job, controls);
-    container.append(card);
+    container.append(section);
   }
 }
 
-function renderDelivery(project, isActive) {
-  const container = element("deliverySummary");
+function renderProjectOverview(project) {
+  const container = element("projectOverview");
   container.replaceChildren();
-  const manifest = project.state?.delivery_manifest;
-  if (!manifest) {
-    const note = document.createElement("p");
-    note.className = "muted";
-    note.textContent = project.artifacts?.includes("paper.md")
-      ? "完成稿已存在。准备交付包会生成可编辑格式、哈希清单和共享边界说明。"
-      : "完成稿生成后可准备可验证的本地交付包。";
-    container.append(note);
-  } else {
-    const status = document.createElement("strong");
-    status.textContent = manifest.ready ? "交付检查通过" : "交付包已生成，仍有阻塞项";
-    const formats = document.createElement("p");
-    formats.textContent = `可用：${(manifest.available_formats || []).join(" / ").toUpperCase() || "无"} · 缺少：${(manifest.missing_formats || []).join(" / ").toUpperCase() || "无"}`;
-    container.append(status, formats);
-    for (const blocker of manifest.blockers || []) {
-      const item = document.createElement("p");
-      item.className = "delivery-blocker";
-      item.textContent = blocker;
-      container.append(item);
-    }
-  }
-  const outputsAreCurrent = project.stage === "completed"
-    && !project.state?.pending_clear_from
-    && !project.state?.clear_generated_on_next_run;
-  element("prepareDelivery").disabled = isActive || !outputsAreCurrent || !project.artifacts?.includes("paper.md");
-}
-
-function renderFeedback(project, isActive) {
-  const container = element("feedbackHistory");
-  container.replaceChildren();
-  const feedback = [...(project.state?.feedback || [])].reverse();
-  for (const item of feedback) {
-    const row = document.createElement("article");
-    const meta = document.createElement("span");
-    const text = document.createElement("p");
-    meta.textContent = `${item.scope} · ${item.status} · ${formatDate(item.created_at)}`;
-    text.textContent = item.text;
-    row.append(meta, text);
+  const documents = project.state?.documents || [];
+  const review = project.state?.final_review || project.state?.review;
+  const spec = project.state?.spec || {};
+  const rows = [
+    ["研究问题", spec.question || project.idea],
+    ["研究贡献", spec.contribution || "尚未形成"],
+    ["材料", `${documents.length} 份（参考资料 ${documents.filter((item) => item.role !== "results").length}，真实结果 ${documents.filter((item) => item.role === "results").length}）`],
+    ["论文与证据", `${(project.state?.papers || []).length} 篇候选论文，${(project.state?.evidence || []).length} 条证据记录，其中模型补充 ${project.state?.llm_discovery_count || 0} 篇`],
+    ["图表规划", `${(project.state?.figure_story || []).length} 幅图，${(project.state?.table_story || []).length} 张表`],
+    ["质量检查", review ? `${review.score}/100，${(review.findings || []).length} 个待处理或提示项` : "尚未完成"],
+  ];
+  for (const [label, value] of rows) {
+    const row = document.createElement("div");
+    const heading = document.createElement("span");
+    const copy = document.createElement("strong");
+    heading.textContent = label;
+    copy.textContent = value;
+    row.append(heading, copy);
     container.append(row);
   }
-  const outputsAreCurrent = project.stage === "completed"
-    && !project.state?.pending_clear_from
-    && !project.state?.clear_generated_on_next_run;
-  element("feedbackText").disabled = isActive || !outputsAreCurrent || !project.artifacts?.includes("paper.md");
-  element("feedbackScope").disabled = isActive || !outputsAreCurrent || !project.artifacts?.includes("paper.md");
-  element("submitFeedback").disabled = isActive || !outputsAreCurrent || !project.artifacts?.includes("paper.md");
+  if (documents.length) {
+    const materials = document.createElement("details");
+    materials.className = "overview-materials";
+    const heading = document.createElement("summary");
+    heading.textContent = `上传材料（${documents.length}）`;
+    materials.append(heading);
+    for (const document of documents) {
+      const item = document.createElement("p");
+      item.textContent = `${document.role === "results" ? "结果" : "资料"} · ${document.name}`;
+      materials.append(item);
+    }
+    container.append(materials);
+  }
+  const artifacts = project.artifacts || [];
+  if (artifacts.length) {
+    const section = document.createElement("section");
+    section.className = "overview-artifacts";
+    const title = document.createElement("strong");
+    title.textContent = `全部材料与制品（${artifacts.length}）`;
+    section.append(title);
+    const list = document.createElement("div");
+    list.className = "artifact-list";
+    for (const name of artifacts) {
+      list.append(artifactActionRow(project, name));
+    }
+    section.append(list);
+    container.append(section);
+  }
 }
 
 async function saveDecision(decisionType, itemId, value, comment) {
@@ -720,16 +1119,38 @@ async function saveProjectConfiguration(event) {
   event.preventDefault();
   if (!state.currentProject) return;
   const button = element("saveConfiguration");
+  const nextConfiguration = collectConfiguration("project");
+  const draftMatches = state.pendingConfiguration
+    && JSON.stringify(state.pendingConfiguration) === JSON.stringify(nextConfiguration);
+  if (!draftMatches) {
+    state.pendingConfiguration = nextConfiguration;
+    button.textContent = "确认配置并更新后续";
+    toast("配置修改草稿已保留；再次点击确认后，才会更新受影响的后续阶段。")
+    return;
+  }
+  if (!window.confirm("确认应用配置修改，并使受影响的后续阶段进入待更新状态？")) return;
   setBusy(button, true, "正在保存…");
   try {
     state.currentProject = await api(`/api/projects/${state.currentProject.id}/configuration`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(collectConfiguration("project", "projectDeliveryFormats")),
+      body: JSON.stringify(nextConfiguration),
     });
+    const shouldRerunGuided = state.currentProject.state?.guided
+      && state.currentProject.state?.pending_clear_from;
+    state.pendingConfiguration = null;
     renderProject(state.currentProject);
     element("projectConfigurationForm").hidden = true;
-    toast("配置已保存；受影响的下游阶段已安全失效。")
+    button.dataset.originalLabel = "保存修改草稿";
+    button.textContent = "保存修改草稿";
+    if (shouldRerunGuided) {
+      await api(`/api/projects/${state.currentProject.id}/run`, { method: "POST" });
+      await refreshCurrentProject();
+      startPolling();
+      toast("配置已确认，正在按新配置重跑受影响阶段；完成后会再次暂停供你检查。")
+    } else {
+      toast("配置已确认；受影响的后续阶段已进入待更新状态。")
+    }
   } catch (error) {
     toast(error.message, true);
   } finally {
@@ -737,24 +1158,33 @@ async function saveProjectConfiguration(event) {
   }
 }
 
-async function submitFeedback(event) {
-  event.preventDefault();
-  if (!state.currentProject) return;
-  const button = element("submitFeedback");
-  const text = element("feedbackText").value.trim();
-  if (text.length < 2) return;
+async function saveStageEdit() {
+  if (!state.currentProject || !state.activeStage) return;
+  const text = element("stageEditText").value.trim();
+  const isScoping = state.activeStage === "scoping";
+  const titleValue = isScoping ? element("stageScopeTitle").value.trim() : "";
+  const keywordValues = isScoping
+    ? element("stageScopeKeywords").value.split(/[，,\n]/).map((item) => item.trim()).filter(Boolean)
+    : [];
+  const title = titleValue || null;
+  const keywords = keywordValues.length ? keywordValues : null;
+  if (text.length < 2 && !title && !keywords?.length) {
+    toast("请填写修改要求，或修改论文题目/搜索关键词。", true);
+    return;
+  }
+  const button = element("saveStageEdit");
   setBusy(button, true, "正在保存…");
   try {
-    await api(`/api/projects/${state.currentProject.id}/feedback`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ scope: element("feedbackScope").value, text }),
-    });
-    element("feedbackText").value = "";
-    await api(`/api/projects/${state.currentProject.id}/resume`, { method: "POST" });
-    await refreshCurrentProject();
-    startPolling();
-    toast("返修意见已保存，旧版本已归档，正在处理受影响内容。")
+    state.currentProject = await api(
+      `/api/projects/${state.currentProject.id}/stage-edits/${state.activeStage}`,
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text, title, keywords }),
+      },
+    );
+    renderProject(state.currentProject);
+    toast("修改草稿已保存，现有结果尚未改变。")
   } catch (error) {
     toast(error.message, true);
   } finally {
@@ -762,14 +1192,17 @@ async function submitFeedback(event) {
   }
 }
 
-async function prepareProjectDelivery() {
-  if (!state.currentProject) return;
-  const button = element("prepareDelivery");
-  setBusy(button, true, "正在打包…");
+async function confirmStageEdit() {
+  if (!state.currentProject || !state.activeStage) return;
+  const stage = state.activeStage;
+  if (!window.confirm(`确认应用“${stageWorkspaceCopy[stage][0]}”的修改，并更新该阶段及后续流程？`)) return;
+  const button = element("confirmStageEdit");
+  setBusy(button, true, "正在确认…");
   try {
-    state.currentProject = await api(`/api/projects/${state.currentProject.id}/delivery`, { method: "POST" });
-    renderProject(state.currentProject);
-    toast("交付包与清单已生成；阻塞项会如实保留。")
+    await api(`/api/projects/${state.currentProject.id}/stage-edits/${stage}/confirm`, { method: "POST" });
+    await refreshCurrentProject();
+    startPolling();
+    toast("修改已确认，系统正在更新本阶段及后续流程。")
   } catch (error) {
     toast(error.message, true);
   } finally {
@@ -780,11 +1213,12 @@ async function prepareProjectDelivery() {
 function renderArtifacts(project) {
   const container = element("artifactList");
   container.replaceChildren();
-  const artifacts = project.artifacts || [];
+  const manuscriptNames = new Set(["paper-draft.md", "paper-draft.tex", "paper.md", "paper.tex"]);
+  const artifacts = (project.artifacts || []).filter((name) => manuscriptNames.has(name));
   if (!artifacts.length) {
     const empty = document.createElement("p");
     empty.className = "muted";
-    empty.textContent = "运行后将在这里出现研究草稿、证据和质量检查报告。";
+    empty.textContent = "研究稿起草后，这里会同时出现 Markdown 稿件与 LaTeX 原文本。";
     container.append(empty);
     return;
   }
@@ -795,26 +1229,7 @@ function renderArtifacts(project) {
     container.append(warning);
   }
   for (const name of artifacts) {
-    const row = document.createElement("div");
-    row.className = "artifact-item";
-    const label = document.createElement("span");
-    label.textContent = artifactLabels[name] || name;
-    const actions = document.createElement("div");
-    actions.className = "artifact-actions";
-    if (name.endsWith(".md") || name.endsWith(".json") || name.endsWith(".tex")) {
-      const preview = document.createElement("button");
-      preview.type = "button";
-      preview.textContent = "预览";
-      preview.addEventListener("click", () => previewArtifact(project.id, name));
-      actions.append(preview);
-    }
-    const download = document.createElement("a");
-    download.href = `/api/projects/${project.id}/artifacts/${encodeURIComponent(name)}`;
-    download.textContent = "下载";
-    download.setAttribute("download", name);
-    actions.append(download);
-    row.append(label, actions);
-    container.append(row);
+    container.append(artifactActionRow(project, name));
   }
 }
 
@@ -844,16 +1259,68 @@ function renderReview(project) {
     : `/ 100 · 需人工处理${checkSummary}`;
   score.append(number, unit);
   container.append(score);
+  const metrics = document.createElement("div");
+  metrics.className = "review-metrics";
+  for (const [key, value] of Object.entries(review.metrics || {})) {
+    const item = document.createElement("span");
+    item.textContent = `${key.replaceAll("_", " ")}：${value}`;
+    metrics.append(item);
+  }
+  if (metrics.childElementCount) container.append(metrics);
   const findings = review.findings || [];
   if (findings.length) {
-    const list = document.createElement("ul");
+    const list = document.createElement("div");
     list.className = "finding-list";
-    for (const finding of findings.slice(0, 4)) {
-      const item = document.createElement("li");
-      item.textContent = finding.message;
+    for (const finding of findings) {
+      const item = document.createElement("article");
+      item.className = `finding-item severity-${finding.severity || "info"}`;
+      const top = document.createElement("div");
+      const severity = document.createElement("span");
+      const code = document.createElement("code");
+      severity.textContent = { high: "高优先级", medium: "中优先级", low: "低优先级" }[finding.severity] || "检查提示";
+      code.textContent = finding.code || "quality_check";
+      top.append(severity, code);
+      const problem = labeledParagraph("检查出的问题", finding.message);
+      const revision = labeledParagraph("建议修改点", finding.suggestion || "由研究者核验并决定是否调整。", "is-revision");
+      item.append(top, problem, revision);
       list.append(item);
     }
     container.append(list);
+  } else {
+    const passed = document.createElement("p");
+    passed.className = "review-passed";
+    passed.textContent = "当前规则未发现阻塞问题；正式交付前仍需研究者核验原文、数据和引用。";
+    container.append(passed);
+  }
+}
+
+async function interruptCurrentProject() {
+  if (!state.currentProject) return;
+  const projectId = state.currentProject.id;
+  state.interruptingProjectId = projectId;
+  stopPolling();
+  renderProject(state.currentProject);
+  try {
+    await api(`/api/projects/${projectId}/interrupt`, { method: "POST" });
+    toast("正在中断当前运行并保存断点…")
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await new Promise((resolve) => window.setTimeout(resolve, 120));
+      const project = await api(`/api/projects/${projectId}`);
+      if (state.currentProject?.id !== projectId) return;
+      if (!project.is_active) {
+        state.interruptingProjectId = null;
+        state.currentProject = project;
+        renderProject(project);
+        await loadProjects();
+        toast("运行已中断，可以从当前断点继续。")
+        return;
+      }
+    }
+    startPolling();
+  } catch (error) {
+    state.interruptingProjectId = null;
+    renderProject(state.currentProject);
+    toast(error.message, true);
   }
 }
 
@@ -895,30 +1362,78 @@ async function projectAction(action, buttonId) {
   }
 }
 
-async function loadHistory() {
-  if (!state.currentProject) return;
+function renderHistoryTimeline(history) {
+  const container = element("historyList");
+  container.replaceChildren();
+  if (!history.length) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "当前还没有已完成的阶段版本。";
+    container.append(empty);
+    return;
+  }
+  for (const revision of history) {
+    const row = document.createElement("article");
+    row.className = `history-item${state.historyRevision === revision.revision ? " is-selected" : ""}`;
+    const copy = document.createElement("div");
+    const heading = document.createElement("strong");
+    const stageName = revision.stage === "completed"
+      ? "工作流完成"
+      : stageWorkspaceCopy[revision.stage]?.[0] || revision.reason;
+    heading.textContent = stageName;
+    const meta = document.createElement("span");
+    meta.textContent = `${formatDate(revision.created_at)} · ${revision.reason}`;
+    copy.append(heading, meta);
+    const action = document.createElement("button");
+    action.type = "button";
+    action.className = "secondary-button";
+    action.textContent = state.historyRevision === revision.revision ? "正在查看" : "查看此版本";
+    action.disabled = state.historyRevision === revision.revision || state.currentProject?.is_active === true;
+    action.addEventListener("click", () => viewHistoryRevision(revision.revision));
+    row.append(copy, action);
+    container.append(row);
+  }
+}
+
+async function viewHistoryRevision(revision) {
+  if (!state.currentProject || state.currentProject.is_active === true) return;
   const projectId = state.currentProject.id;
   try {
-    const history = await api(`/api/projects/${projectId}/history`);
+    const manifest = await api(`/api/projects/${projectId}/history/${revision}`);
     if (state.currentProject?.id !== projectId) return;
-    const container = element("historyList");
-    container.replaceChildren();
-    if (!history.length) container.textContent = "尚无历史版本；首次重做前会自动保存。";
-    for (const revision of history) {
-      const row = document.createElement("p");
-      row.textContent = `${formatDate(revision.created_at)} · ${revision.reason} `;
-      for (const name of ["manifest.json", ...Object.keys(revision.artifacts)]) {
-        const link = document.createElement("a");
-        link.href = `/api/projects/${projectId}/history/${revision.revision}/${encodeURIComponent(name)}`;
-        link.textContent = ` ${name} `;
-        link.download = name;
-        row.append(link);
-      }
-      container.append(row);
-    }
+    const snapshot = {
+      ...manifest.project,
+      stage: manifest.stage ?? manifest.project?.stage,
+      is_active: false,
+      is_history: true,
+      history_revision: manifest.revision,
+      history_stage: manifest.stage,
+      history_reason: manifest.reason,
+      history_created_at: manifest.created_at,
+      artifacts: Object.keys(manifest.artifacts || {}),
+      history: state.currentProject.history || [],
+    };
+    state.historyRevision = revision;
+    state.historyProject = snapshot;
+    state.activeStageProjectId = projectId;
+    state.activeStage = stages.includes(manifest.stage)
+      ? manifest.stage
+      : snapshot.stage === "completed" ? "revising" : snapshot.stage;
+    renderProject(snapshot);
+    element("projectWorkspace").scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (error) {
     toast(error.message, true);
   }
+}
+
+function returnToCurrentVersion() {
+  if (!state.currentProject) return;
+  state.historyProject = null;
+  state.historyRevision = null;
+  state.activeStageProjectId = null;
+  element("historyPanel").open = false;
+  renderProject(state.currentProject);
+  element("projectWorkspace").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 async function confirmSearchPlan() {
@@ -969,7 +1484,7 @@ async function rejectSearchPlan() {
 }
 
 async function deleteCurrentProject() {
-  if (!state.currentProject || state.currentProject.is_active === true) return;
+  if (!state.currentProject || state.currentProject.is_active === true || state.historyProject) return;
   const project = state.currentProject;
   const title = project.title || project.idea;
   const confirmed = window.confirm(
@@ -984,6 +1499,7 @@ async function deleteCurrentProject() {
     state.currentProject = null;
     element("projectWorkspace").hidden = true;
     element("paperPreviewPanel").hidden = true;
+    showView("workspace");
     await loadProjects();
     toast(`项目 ${project.id} 已删除。`);
   } catch (error) {
@@ -993,6 +1509,7 @@ async function deleteCurrentProject() {
     } catch {
       state.currentProject = null;
       element("projectWorkspace").hidden = true;
+      showView("workspace");
       await loadProjects().catch(() => {});
     }
     toast(error.message, true);
@@ -1025,15 +1542,172 @@ async function uploadMore() {
   }
 }
 
-async function previewArtifact(projectId, name) {
+async function previewArtifact(projectId, name, revision = null) {
   try {
-    const content = await api(`/api/projects/${projectId}/artifacts/${encodeURIComponent(name)}`);
-    element("paperPreview").textContent = typeof content === "string" ? content : JSON.stringify(content, null, 2);
+    const path = revision
+      ? `/api/projects/${projectId}/history/${revision}/${encodeURIComponent(name)}`
+      : `/api/projects/${projectId}/artifacts/${encodeURIComponent(name)}`;
+    const content = await api(path);
+    const text = typeof content === "string" ? content : JSON.stringify(content, null, 2);
+    const isMarkdown = name.endsWith(".md");
+    element("previewTitle").textContent = artifactLabels[name] || name;
+    element("previewHint").textContent = isMarkdown
+      ? "Markdown 已按纸张样式排版，可使用浏览器打印为 PDF。"
+      : name.endsWith(".tex")
+        ? "当前提供 LaTeX 源码即时预览；本机配置 TeX 编译器后可生成最终 PDF。"
+        : "结构化内容预览。";
+    element("paperPreviewDocument").hidden = !isMarkdown;
+    element("paperPreviewSource").hidden = false;
+    element("paperPreviewSourceLabel").textContent = isMarkdown ? "Markdown 原文" : "LaTeX 原文";
+    element("printPreview").hidden = !isMarkdown;
+    if (isMarkdown) renderMarkdownDocument(text, element("paperPreviewDocument"));
+    element("paperPreview").textContent = text;
     element("paperPreviewPanel").hidden = false;
     element("paperPreviewPanel").scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (error) {
     toast(error.message, true);
   }
+}
+
+function renderMarkdownDocument(markdown, container) {
+  container.replaceChildren();
+  const lines = markdown.split(/\r?\n/);
+  let list = null;
+  let listType = null;
+  for (let index = 0; index < lines.length; index += 1) {
+    const rawLine = lines[index];
+    const line = rawLine.trim();
+    if (!line) {
+      list = null;
+      listType = null;
+      continue;
+    }
+    if (/^```/.test(line)) {
+      const language = line.slice(3).trim();
+      const codeLines = [];
+      index += 1;
+      while (index < lines.length && !/^```/.test(lines[index].trim())) {
+        codeLines.push(lines[index]);
+        index += 1;
+      }
+      const pre = document.createElement("pre");
+      const code = document.createElement("code");
+      if (language) code.dataset.language = language;
+      code.textContent = codeLines.join("\n");
+      pre.append(code);
+      container.append(pre);
+      list = null;
+      listType = null;
+      continue;
+    }
+    if (line.includes("|") && index + 1 < lines.length && isMarkdownTableDivider(lines[index + 1])) {
+      const headers = splitMarkdownTableRow(line);
+      const table = document.createElement("table");
+      const thead = document.createElement("thead");
+      const headingRow = document.createElement("tr");
+      for (const value of headers) {
+        const cell = document.createElement("th");
+        appendInlineMarkdown(cell, value);
+        headingRow.append(cell);
+      }
+      thead.append(headingRow);
+      table.append(thead);
+      const tbody = document.createElement("tbody");
+      index += 2;
+      while (index < lines.length && lines[index].includes("|") && lines[index].trim()) {
+        const row = document.createElement("tr");
+        for (const value of splitMarkdownTableRow(lines[index])) {
+          const cell = document.createElement("td");
+          appendInlineMarkdown(cell, value);
+          row.append(cell);
+        }
+        tbody.append(row);
+        index += 1;
+      }
+      index -= 1;
+      table.append(tbody);
+      container.append(table);
+      list = null;
+      listType = null;
+      continue;
+    }
+    const heading = /^(#{1,6})\s+(.+)$/.exec(line);
+    if (heading) {
+      const node = document.createElement(`h${heading[1].length}`);
+      appendInlineMarkdown(node, heading[2]);
+      container.append(node);
+      list = null;
+      listType = null;
+      continue;
+    }
+    if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(line)) {
+      container.append(document.createElement("hr"));
+      list = null;
+      listType = null;
+      continue;
+    }
+    const bullet = /^([-*+]\s+|\d+[.)]\s+)(.+)$/.exec(line);
+    if (bullet) {
+      const nextListType = /^\d/.test(bullet[1]) ? "ol" : "ul";
+      if (!list || listType !== nextListType) {
+        list = document.createElement(nextListType);
+        listType = nextListType;
+        container.append(list);
+      }
+      const item = document.createElement("li");
+      appendInlineMarkdown(item, bullet[2]);
+      list.append(item);
+      continue;
+    }
+    const quote = /^>\s*(.+)$/.exec(line);
+    const node = document.createElement(quote ? "blockquote" : "p");
+    appendInlineMarkdown(node, quote ? quote[1] : line);
+    container.append(node);
+    list = null;
+    listType = null;
+  }
+}
+
+function splitMarkdownTableRow(line) {
+  return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
+}
+
+function isMarkdownTableDivider(line) {
+  const cells = splitMarkdownTableRow(line);
+  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+function appendInlineMarkdown(container, text) {
+  const pattern = /(`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|\[[^\]]+\]\(https?:\/\/[^\s)]+\)|\$[^$]+\$|\*[^*]+\*|_[^_]+_)/g;
+  let cursor = 0;
+  for (const match of text.matchAll(pattern)) {
+    if (match.index > cursor) container.append(document.createTextNode(text.slice(cursor, match.index)));
+    const token = match[0];
+    let node;
+    if (token.startsWith("`")) {
+      node = document.createElement("code");
+      node.textContent = token.slice(1, -1);
+    } else if (token.startsWith("**") || token.startsWith("__")) {
+      node = document.createElement("strong");
+      node.textContent = token.slice(2, -2);
+    } else if (token.startsWith("[")) {
+      const parts = /^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/.exec(token);
+      node = document.createElement("a");
+      node.textContent = parts[1];
+      node.href = parts[2];
+      node.rel = "noopener noreferrer";
+    } else if (token.startsWith("$")) {
+      node = document.createElement("span");
+      node.className = "math-expression";
+      node.textContent = token.slice(1, -1);
+    } else {
+      node = document.createElement("em");
+      node.textContent = token.slice(1, -1);
+    }
+    container.append(node);
+    cursor = match.index + token.length;
+  }
+  if (cursor < text.length) container.append(document.createTextNode(text.slice(cursor)));
 }
 
 async function searchPapers(event) {
@@ -1258,21 +1932,17 @@ function formatDate(value) {
 
 function bindEvents() {
   document.querySelectorAll(".nav-button").forEach((button) => button.addEventListener("click", () => showView(button.dataset.view)));
+  document.querySelectorAll("#stageList [data-stage]").forEach((item) => {
+    item.querySelector("button").addEventListener("click", () => selectWorkspaceStage(item.dataset.stage));
+  });
   element("createForm").addEventListener("submit", createProject);
-  element("searchForm").addEventListener("submit", searchPapers);
-  element("searchField").addEventListener("change", updateSearchField);
   element("refreshProjects").addEventListener("click", () => loadProjects().catch((error) => toast(error.message, true)));
   element("refreshProject").addEventListener("click", () => refreshCurrentProject().catch((error) => toast(error.message, true)));
   element("runProject").addEventListener("click", runCurrentProject);
+  element("interruptProject").addEventListener("click", interruptCurrentProject);
   element("resumeProject").addEventListener("click", () => projectAction("resume", "resumeProject"));
   element("approveStage").addEventListener("click", () => projectAction("approve", "approveStage"));
-  element("loadHistory").addEventListener("click", loadHistory);
-  element("rerunStageButton").addEventListener("click", () => {
-    const stage = element("rerunStage").value;
-    if (window.confirm("将保存历史快照，然后重做所选阶段及其下游。是否继续？")) {
-      projectAction(`rerun?stage=${encodeURIComponent(stage)}`, "rerunStageButton");
-    }
-  });
+  element("returnCurrentVersion").addEventListener("click", returnToCurrentVersion);
   element("confirmSearch").addEventListener("click", confirmSearchPlan);
   element("rejectSearch").addEventListener("click", rejectSearchPlan);
   element("deleteProject").addEventListener("click", deleteCurrentProject);
@@ -1284,8 +1954,14 @@ function bindEvents() {
     form.hidden = !form.hidden;
   });
   element("projectConfigurationForm").addEventListener("submit", saveProjectConfiguration);
-  element("feedbackForm").addEventListener("submit", submitFeedback);
-  element("prepareDelivery").addEventListener("click", prepareProjectDelivery);
+  element("projectConfigurationForm").addEventListener("input", () => {
+    state.pendingConfiguration = null;
+    const button = element("saveConfiguration");
+    button.textContent = "保存修改草稿";
+    button.dataset.originalLabel = "保存修改草稿";
+  });
+  element("saveStageEdit").addEventListener("click", saveStageEdit);
+  element("confirmStageEdit").addEventListener("click", confirmStageEdit);
   element("copyConfiguration").addEventListener("click", async () => {
     if (!state.currentProject) return;
     try {
@@ -1295,7 +1971,12 @@ function bindEvents() {
       toast("浏览器未允许复制，请使用配置编辑区查看。", true);
     }
   });
+  element("goToCreateProject").addEventListener("click", () => {
+    showView("projects");
+    element("idea").focus();
+  });
   element("closePreview").addEventListener("click", () => { element("paperPreviewPanel").hidden = true; });
+  element("printPreview").addEventListener("click", () => window.print());
 }
 
 async function init() {
@@ -1308,7 +1989,6 @@ async function init() {
   element("idea").addEventListener("mouseleave", collapseIdeaOnDemand);
   element("idea").addEventListener("blur", collapseIdeaOnDemand);
   updateIdeaLength();
-  updateSearchField();
   updateReferenceCountState();
   try {
     await Promise.all([loadHealth(), loadProjects()]);

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import zipfile
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
+from scholaros import __version__
 from scholaros.api import create_app
 from scholaros.delivery import markdown_to_docx, markdown_to_tex
 from scholaros.domain import Stage
@@ -27,12 +29,14 @@ def offline_flow(settings) -> ResearchWorkflow:
 def test_configuration_is_complete_and_strict() -> None:
     config = normalize_configuration({"workflow": "transfer", "formats": ["tex", "md", "md"]})
     assert config["workflow"] == "transfer"
-    assert config["formats"] == ["tex", "md"]
+    assert config["formats"] == ["md", "tex"]
     assert config["same_field_papers"] == 3
     with pytest.raises(ValueError, match="未知项目配置"):
         normalize_configuration({"workflow": "review", "secret_mode": True})
     with pytest.raises(ValueError, match="reference_count"):
         normalize_configuration({"reference_count_mode": "custom"})
+    with pytest.raises(ValueError, match="至少选择"):
+        normalize_configuration({"formats": []})
 
 
 def test_docx_and_tex_exports_are_editable_and_ingestible(tmp_path) -> None:
@@ -44,39 +48,37 @@ def test_docx_and_tex_exports_are_editable_and_ingestible(tmp_path) -> None:
     document = DocumentIngestor().ingest(docx_path)
     assert "研究标题" in document.text
     assert "重点" in document.text
-    tex = markdown_to_tex(markdown, language="zh")
-    assert "\\documentclass[11pt]{ctexart}" in tex
+    tex = markdown_to_tex(markdown)
+    assert "\\documentclass[journal]{IEEEtran}" in tex
     assert "\\cite{Source1}" in tex
+    assert (Path(__file__).parents[1] / "templates" / "ieee" / "IEEEtran" / "IEEEtran.cls").exists()
 
 
-async def test_guided_contribution_choice_updates_same_project(settings) -> None:
+async def test_guided_scoping_exposes_one_contribution_blueprint(settings) -> None:
     flow = offline_flow(settings)
-    project = flow.create_project("验证贡献候选在同一个研究项目中保存", guided=True)
+    project = flow.create_project("验证范围阶段直接给出一份可修改的贡献蓝图", guided=True)
     pending = await flow.run(project.id)
     assert pending.state["pending_checkpoint"] == "scoping"
-    assert len(pending.state["contribution_options"]) == 3
-    updated = flow.save_decision(
-        project.id,
-        decision_type="contribution",
-        item_id="validation",
-        value="selected",
-        comment="优先说明失败边界",
-    )
-    assert updated.id == project.id
-    assert updated.state["selected_contribution"] == "validation"
-    assert "失败边界" in updated.state["spec"]["contribution"]
-    assert updated.state["decisions"][0]["comment"] == "优先说明失败边界"
+    blueprint = pending.state["contribution_blueprint"]
+    assert blueprint["intended_contribution"] == pending.state["spec"]["contribution"]
+    assert blueprint["boundaries"]
+    assert blueprint["framework"]
+    assert "contribution_options" not in pending.state
+    assert "selected_contribution" not in pending.state
 
 
 async def test_figure_feedback_and_delivery_lifecycle(settings) -> None:
     flow = offline_flow(settings)
     project = flow.create_project(
         "验证图件、反馈与交付中心共享同一份项目状态",
-        configuration={"formats": ["md", "docx", "tex", "pdf"]},
+        configuration={"formats": ["md", "tex"]},
     )
     completed = await flow.run(project.id)
     assert completed.stage == Stage.COMPLETED
     assert len(completed.state["figure_story"]) == 3
+    assert len(completed.state["table_story"]) >= 2
+    assert flow.store.artifact_path(project.id, "paper-draft.tex") is not None
+    assert flow.store.artifact_path(project.id, "paper.tex") is not None
     flow.save_decision(
         project.id,
         decision_type="figure",
@@ -91,13 +93,12 @@ async def test_figure_feedback_and_delivery_lifecycle(settings) -> None:
     assert figure_story[0]["comment"] == "后续补机制图素材"
     delivered = flow.prepare_delivery(project.id)
     manifest = delivered.state["delivery_manifest"]
-    assert manifest["available_formats"] == ["md", "docx", "tex"]
-    assert manifest["missing_formats"] == ["pdf"]
-    assert manifest["ready"] is False
+    assert manifest["available_formats"] == ["md", "tex"]
+    assert manifest["missing_formats"] == []
     package = flow.store.artifact_path(project.id, "delivery-package.zip")
     with zipfile.ZipFile(package) as archive:
         names = set(archive.namelist())
-    assert {"paper.md", "paper.docx", "paper.tex", "delivery-manifest.json"} <= names
+    assert {"paper.md", "paper.tex", "delivery-manifest.json"} <= names
     assert not any(name.startswith("source-") for name in names)
 
     changed = flow.save_decision(
@@ -194,6 +195,7 @@ async def test_materials_only_never_calls_external_search(settings, tmp_path) ->
     assert completed.state["search_skipped"] == "materials_only"
     assert completed.state["search_queries"] == []
     assert completed.state["papers"] == []
+    assert completed.state["llm_discovery_count"] == 0
     assert completed.state["evidence"][0]["paper_title"] == "local-notes.md"
 
 
@@ -228,6 +230,7 @@ async def test_design_configuration_and_stale_outputs_are_guarded(settings) -> N
     assert updated.stage == Stage.DESIGNING
     assert updated.state["pending_clear_from"] == "designing"
     assert "figure_story" not in updated.state
+    assert "table_story" not in updated.state
     assert not [item for item in updated.state["decisions"] if item.get("type") == "figure"]
     with pytest.raises(ValueError, match="待更新阶段"):
         flow.prepare_delivery(project.id)
@@ -253,24 +256,23 @@ async def test_invalid_figure_decision_does_not_corrupt_artifact(settings) -> No
     assert path.read_bytes() == before
 
 
-async def test_configuration_change_invalidates_delivery_outputs(settings) -> None:
+async def test_draft_configuration_change_invalidates_delivery_outputs(settings) -> None:
     flow = offline_flow(settings)
     project = flow.create_project(
         "验证交付配置变化后不会继续暴露旧的交付包",
-        configuration={"formats": ["md", "docx"]},
+        configuration={"formats": ["md"]},
     )
     await flow.run(project.id)
     delivered = flow.prepare_delivery(project.id)
     assert delivered.state["delivery_manifest"]
-    assert flow.store.artifact_path(project.id, "paper.docx") is not None
     assert flow.store.artifact_path(project.id, "delivery-package.zip") is not None
 
     updated = flow.update_configuration(
         project.id,
-        {**delivered.state["configuration"], "formats": ["md", "tex"]},
+        {**delivered.state["configuration"], "output_language": "en"},
     )
     assert "delivery_manifest" not in updated.state
-    assert flow.store.artifact_path(project.id, "paper.docx") is None
+    assert flow.store.artifact_path(project.id, "paper.tex") is None
     assert flow.store.artifact_path(project.id, "delivery-package.zip") is None
     assert flow.store.artifact_path(project.id, "paper.md") is not None
 
@@ -282,7 +284,7 @@ async def test_external_delivery_scopes_only_package_requested_manuscript_format
     flow = offline_flow(settings)
     project = flow.create_project(
         "验证对外交付范围不会包含证据摘录与内部审阅记录",
-        configuration={"requested_scope": scope, "formats": ["md", "docx"]},
+        configuration={"requested_scope": scope, "formats": ["md", "tex"]},
     )
     await flow.run(project.id)
 
@@ -290,10 +292,20 @@ async def test_external_delivery_scopes_only_package_requested_manuscript_format
     with zipfile.ZipFile(flow.store.artifact_path(project.id, "delivery-package.zip")) as archive:
         names = set(archive.namelist())
 
-    assert names == {"paper.md", "paper.docx", "delivery-manifest.json"}
+    assert names == {
+        "paper.md",
+        "paper.tex",
+        "IEEEtran.cls",
+        "IEEEtran.bst",
+        "delivery-manifest.json",
+    }
     assert {item["name"] for item in delivered.state["delivery_manifest"]["files"]} == {
         "paper.md",
-        "paper.docx",
+        "paper.tex",
+    }
+    assert {item["name"] for item in delivered.state["delivery_manifest"]["template_files"]} == {
+        "IEEEtran.cls",
+        "IEEEtran.bst",
     }
     assert "证据账本" in delivered.state["delivery_manifest"]["sharing_boundary"]
 
@@ -315,21 +327,16 @@ async def test_local_delivery_scope_includes_auditable_supporting_records(settin
 
 async def test_scoping_rerun_resets_stale_contribution_choice(settings) -> None:
     flow = offline_flow(settings)
-    project = flow.create_project("验证重新界定范围后贡献选择与新研究规格保持一致")
-    await flow.run(project.id)
-    flow.save_decision(
-        project.id,
-        decision_type="contribution",
-        item_id="validation",
-        value="selected",
-    )
-    await flow.resume(project.id)
+    project = flow.create_project("验证重新界定范围后贡献蓝图与新研究规格保持一致")
+    completed = await flow.run(project.id)
+    completed.state["contribution_blueprint"]["intended_contribution"] = "过期贡献"
+    flow.store.save_project(completed)
 
     rerun = await flow.rerun_from(project.id, Stage.SCOPING)
 
-    assert rerun.state["selected_contribution"] == "primary"
-    assert not [item for item in rerun.state["decisions"] if item.get("type") == "contribution"]
-    assert rerun.state["spec"]["contribution"] == rerun.state["contribution_options"][0]["summary"]
+    assert "selected_contribution" not in rerun.state
+    assert "contribution_options" not in rerun.state
+    assert rerun.state["contribution_blueprint"]["intended_contribution"] == rerun.state["spec"]["contribution"]
 
 
 def test_v2_api_configuration_decision_feedback_and_delivery(settings) -> None:
@@ -423,12 +430,14 @@ def test_web_home_exposes_eight_area_workspace(settings) -> None:
         "draftWorkbench",
         "figureWorkbench",
         "reviewWorkbench",
-        "deliveryWorkbench",
+        "projectOverviewWorkbench",
     ):
         assert f'id="{identifier}"' in response.text
-    assert 'name="deliveryFormats" value="docx"' in response.text
+    assert "Markdown + LaTeX" in response.text
+    assert 'name="deliveryFormats"' not in response.text
+    assert 'name="deliveryFormats" value="docx"' not in response.text
     assert 'class="brand-icon"' in response.text
-    assert 'id="brandVersion" class="brand-version">v0.2.0' in response.text
+    assert f'id="brandVersion" class="brand-version">v{__version__}' in response.text
     assert 'class="workspace-grid v2-workbench-grid"' in response.text
     for section in (
         "configurationWorkbench",
@@ -438,9 +447,178 @@ def test_web_home_exposes_eight_area_workspace(settings) -> None:
         "draftWorkbench",
         "figureWorkbench",
         "reviewWorkbench",
-        "deliveryWorkbench",
     ):
-        assert f'data-section="{section}"' in response.text
+        assert f'id="{section}"' in response.text
+    assert 'id="stageEditText"' in response.text
+    assert 'id="stageScopeTitle"' in response.text
+    assert 'id="stageScopeKeywords"' in response.text
+    assert 'id="feedbackWorkbench"' not in response.text
+    assert "意见与同任务返修" not in response.text
+
+
+def test_project_read_backfills_latex_and_detailed_figure_table_plans(settings) -> None:
+    import asyncio
+
+    flow = offline_flow(settings)
+    project = flow.create_project("验证旧项目读取时补齐可预览稿件与图表规划")
+    asyncio.run(flow.run(project.id))
+    flow.store.clear_generated_artifacts(
+        project.id, {"paper-draft.tex", "paper.tex", "table-story.json"}
+    )
+    legacy = flow.store.get_project(project.id)
+    legacy.state.pop("table_story", None)
+    for figure in legacy.state["figure_story"]:
+        figure.pop("composition", None)
+    flow.store.save_project(legacy)
+
+    with TestClient(create_app(flow)) as client:
+        response = client.get(f"/api/projects/{project.id}")
+
+    assert response.status_code == 200
+    assert {"paper-draft.tex", "paper.tex", "table-story.json"} <= set(
+        response.json()["artifacts"]
+    )
+    assert response.json()["state"]["table_story"]
+    assert response.json()["state"]["figure_story"][0]["composition"]
+
+
+async def test_stage_edit_only_invalidates_after_confirmation(settings) -> None:
+    flow = offline_flow(settings)
+    project = flow.create_project("验证阶段修改需要先保存再确认后更新下游")
+    await flow.run(project.id)
+    before = flow.store.artifact_path(project.id, "paper.md").read_text(encoding="utf-8")
+
+    drafted = flow.save_stage_edit(project.id, stage=Stage.DESIGNING, text="加强失败边界")
+    assert drafted.stage == Stage.COMPLETED
+    assert flow.store.artifact_path(project.id, "paper.md").read_text(encoding="utf-8") == before
+
+    flow.confirm_stage_edit(project.id, stage=Stage.DESIGNING)
+    confirmed = flow.store.get_project(project.id)
+    assert confirmed.stage == Stage.DESIGNING
+    assert confirmed.state["stage_instructions"]["designing"] == "加强失败边界"
+    assert confirmed.state["pending_clear_from"] == "designing"
+    assert flow.store.artifact_path(project.id, "paper.md") is not None
+
+
+async def test_scoping_title_and_keywords_are_pending_until_confirmation(settings) -> None:
+    flow = offline_flow(settings)
+    project = flow.create_project("验证范围阶段可修改论文题目和搜索关键词")
+    await flow.run(project.id)
+    before = flow.store.get_project(project.id)
+    old_title = before.title
+    old_keywords = list(before.state["spec"]["keywords"])
+
+    pending = flow.save_stage_edit(
+        project.id,
+        stage=Stage.SCOPING,
+        text="",
+        title="新的论文题目",
+        keywords=["evidence grounding", "research workflow", "traceability"],
+    )
+    assert pending.title == old_title
+    assert pending.state["spec"]["keywords"] == old_keywords
+    assert pending.state["pending_stage_edits"]["scoping"]["title"] == "新的论文题目"
+
+    flow.confirm_stage_edit(project.id, stage=Stage.SCOPING)
+    updated = flow.store.get_project(project.id)
+    assert updated.state["pending_scope_override"]
+    await flow.resume(project.id)
+    completed = flow.store.get_project(project.id)
+    assert completed.title == "新的论文题目"
+    assert completed.state["spec"]["keywords"] == [
+        "evidence grounding",
+        "research workflow",
+        "traceability",
+    ]
+
+
+def test_search_rerun_invalidates_llm_discovery_count(settings) -> None:
+    flow = offline_flow(settings)
+    project = flow.create_project("验证重做检索不会保留旧的模型补充计数")
+    project.state["llm_discovery_count"] = 4
+
+    flow._invalidate_from(project, Stage.SEARCHING)
+
+    assert "llm_discovery_count" not in project.state
+
+
+async def test_review_workflow_applies_drafting_and_reviewing_stage_instructions(
+    settings, tmp_path
+) -> None:
+    class InstructionWriter(ResearchWriter):
+        async def revise(self, paper, findings, feedback=()):
+            del findings
+            instructions = [item["text"] for item in feedback]
+            return f"{paper}\n\n{' '.join(instructions)}" if instructions else paper
+
+    flow = ResearchWorkflow(
+        settings,
+        search=PaperSearchService([]),
+        writer=InstructionWriter(),
+        allow_empty_search=True,
+    )
+    project = flow.create_project(
+        "验证审阅工作流的阶段修改要求会进入实际处理链路",
+        configuration={"workflow": "review"},
+    )
+    manuscript = tmp_path / "manuscript.md"
+    manuscript.write_text("# 原稿\n\n待审阅内容。", encoding="utf-8")
+    flow.add_document(project.id, manuscript)
+    project = flow.store.get_project(project.id)
+    project.state["stage_instructions"] = {
+        "drafting": "统一术语表达",
+        "reviewing": "重点检查因果结论边界",
+    }
+    flow.store.save_project(project)
+
+    completed = await flow.run(project.id)
+
+    draft = flow.store.artifact_path(project.id, "paper-draft.md").read_text(encoding="utf-8")
+    assert "统一术语表达" in draft
+    assert any(
+        item["code"] == "researcher_review_focus"
+        and "因果结论边界" in item["message"]
+        for item in completed.state["review"]["findings"]
+    )
+
+
+async def test_project_search_saves_model_discovery_as_evidence(settings) -> None:
+    class SupplementalWriter(ResearchWriter):
+        async def discover_papers(self, query, venue_sources=()):
+            del query, venue_sources
+            from scholaros.domain import Paper
+
+            return [
+                Paper(
+                    title="A Model-Discovered Research Paper",
+                    authors=[],
+                    year=2026,
+                    abstract="Model-discovered abstract retained for a traceable evidence entry.",
+                    sources=["llm_discovery"],
+                    external_id="llm:model-discovered",
+                    landing_url="https://example.org/model-discovered",
+                )
+            ]
+
+    flow = ResearchWorkflow(
+        settings,
+        search=PaperSearchService([]),
+        writer=SupplementalWriter(),
+        allow_empty_search=True,
+    )
+    project = flow.create_project("验证模型补充发现的论文进入项目证据材料")
+
+    completed = await flow.run(project.id)
+
+    assert completed.state["llm_discovery_count"] == 1
+    assert completed.state["papers"][0]["sources"] == ["llm_discovery"]
+    evidence = next(
+        item
+        for item in completed.state["evidence"]
+        if item["paper_title"] == "A Model-Discovered Research Paper"
+    )
+    assert "Model-discovered abstract" in evidence["summary"]
+    assert any("模型补充发现" in item for item in evidence["caveats"])
 
 
 def test_learning_and_figure_artifacts_are_json(settings) -> None:
@@ -449,6 +627,11 @@ def test_learning_and_figure_artifacts_are_json(settings) -> None:
     import asyncio
 
     asyncio.run(flow.run(project.id))
-    for name in ("learning-plan.json", "contribution-options.json", "figure-story.json"):
+    for name in (
+        "learning-plan.json",
+        "contribution-blueprint.json",
+        "figure-story.json",
+        "table-story.json",
+    ):
         value = json.loads(flow.store.artifact_path(project.id, name).read_text(encoding="utf-8"))
         assert value

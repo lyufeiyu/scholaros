@@ -81,4 +81,4 @@ Long-term improvement should come from auditable feedback: search decisions, evi
 
 ## 30-second introduction
 
-> ScholarOS is a local research assistant workspace. It helps researchers organize cross-source search, evidence ledgers, method drafts, research drafts, and quality-check records without replacing original-source reading, experimental work, or academic judgment. Every output requires human verification; researchers retain final responsibility for ethics, data, conclusions, authorship, and submission.
+> ScholarOS is a local research assistant workspace. It helps researchers organize candidate-paper collection, evidence ledgers, method drafts, research drafts, and quality-check records without replacing original-source reading, experimental work, or academic judgment. Every output requires human verification; researchers retain final responsibility for ethics, data, conclusions, authorship, and submission.

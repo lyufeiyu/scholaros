@@ -61,7 +61,7 @@ ScholarOS only provides research assistance. Search results, evidence summaries,
 - `ieee.available=true` in the Web status or `/health` only proves that ScholarOS read a key; it does not prove activation. Rely on the activation email and the first real response. A 401/403 message identifies a pending, invalid, or unauthorized key. Never commit `.env` or the key.
 - The Metadata Search API and open/subscription full-text APIs are separate permission layers.
 - A university Web subscription does not automatically authorize API bulk full-text retrieval. Use the browser for individual articles covered by the subscription; automated retrieval requires separate confirmation from the library or IEEE.
-- IEEE's current [API Terms of Use](https://developer.ieee.org/API_Terms_of_Use2) place restrictions on AI/LLM and data-mining use of Content. To avoid sending IEEE metadata or abstracts to a model without authorization, the current `ieee` adapter is available only in `scholaros search` and the Web cross-source search, not the idea-to-draft workflow.
+- IEEE's current [API Terms of Use](https://developer.ieee.org/API_Terms_of_Use2) place restrictions on AI/LLM and data-mining use of Content. To avoid sending IEEE metadata or abstracts to a model without authorization, the current `ieee` adapter is available only through the `scholaros search` command and the `/api/search` endpoint, not the idea-to-draft workflow.
 - Add an explicit opt-in AI connector only after IEEE or the university library grants written permission for the specific research use. A university browser login alone is not sufficient.
 
 ### IEEE bibliographic metadata via Crossref

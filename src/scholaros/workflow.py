@@ -996,7 +996,10 @@ class ResearchWorkflow:
                         discovered = await discover_papers("；".join(queries))
                         if discovered:
                             result.papers = self.search.merge_papers(
-                                " ".join(queries), [*result.papers, *discovered], 100
+                                " ".join(queries),
+                                [*result.papers, *discovered],
+                                100,
+                                require_match=True,
                             )
                     project.state["llm_discovery_count"] = len(
                         [paper for paper in result.papers if "llm_discovery" in paper.sources]

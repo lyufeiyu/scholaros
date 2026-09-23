@@ -48,9 +48,14 @@ def test_docx_and_tex_exports_are_editable_and_ingestible(tmp_path) -> None:
     document = DocumentIngestor().ingest(docx_path)
     assert "研究标题" in document.text
     assert "重点" in document.text
-    tex = markdown_to_tex(markdown)
-    assert "\\documentclass[journal]{IEEEtran}" in tex
-    assert "\\cite{Source1}" in tex
+    chinese_tex = markdown_to_tex(markdown)
+    assert "\\documentclass{ctexart}" in chinese_tex
+    assert "\\cite{Source1}" in chinese_tex
+    assert "研究标题" in chinese_tex
+
+    english_tex = markdown_to_tex("# Research Title\n\nBody cites [@Source1] with **emphasis**.")
+    assert "\\documentclass[journal]{IEEEtran}" in english_tex
+    assert "\\cite{Source1}" in english_tex
     assert (Path(__file__).parents[1] / "templates" / "ieee" / "IEEEtran" / "IEEEtran.cls").exists()
 
 
@@ -295,19 +300,18 @@ async def test_external_delivery_scopes_only_package_requested_manuscript_format
     assert names == {
         "paper.md",
         "paper.tex",
-        "IEEEtran.cls",
-        "IEEEtran.bst",
         "delivery-manifest.json",
     }
     assert {item["name"] for item in delivered.state["delivery_manifest"]["files"]} == {
         "paper.md",
         "paper.tex",
     }
-    assert {item["name"] for item in delivered.state["delivery_manifest"]["template_files"]} == {
-        "IEEEtran.cls",
-        "IEEEtran.bst",
-    }
+    assert delivered.state["delivery_manifest"]["template_files"] == []
     assert "证据账本" in delivered.state["delivery_manifest"]["sharing_boundary"]
+    if scope == "submission_package":
+        manifest = delivered.state["delivery_manifest"]
+        assert not any("投稿前由研究者确认" in item for item in manifest["blockers"])
+        assert any("投稿前由研究者确认" in item for item in manifest.get("warnings", []))
 
 
 async def test_local_delivery_scope_includes_auditable_supporting_records(settings) -> None:
@@ -323,6 +327,20 @@ async def test_local_delivery_scope_includes_auditable_supporting_records(settin
 
     assert {"paper.md", "evidence.json", "figure-story.json", "final-review.json"} <= files
     assert "可能含上传材料摘录" in delivered.state["delivery_manifest"]["sharing_boundary"]
+
+
+def test_english_delivery_packages_ieee_template(settings) -> None:
+    from scholaros.delivery import prepare_delivery
+    from scholaros.domain import Project
+
+    flow = offline_flow(settings)
+    project = Project(id="ab12ab12ab12", idea="English delivery package")
+    flow.store.save_artifact(project.id, "paper.md", "# English Title\n\nBody cites [@A].\n")
+
+    manifest = prepare_delivery(project, flow.store)
+
+    assert {item["name"] for item in manifest["template_files"]} == {"IEEEtran.cls", "IEEEtran.bst"}
+    assert "paper.tex" in {item["name"] for item in manifest["files"]}
 
 
 async def test_scoping_rerun_resets_stale_contribution_choice(settings) -> None:
@@ -584,13 +602,25 @@ async def test_review_workflow_applies_drafting_and_reviewing_stage_instructions
 
 async def test_project_search_saves_model_discovery_as_evidence(settings) -> None:
     class SupplementalWriter(ResearchWriter):
+        async def scope(self, idea, documents=(), configuration=None, instruction=""):
+            del idea, documents, configuration, instruction
+            from scholaros.domain import ResearchSpec
+
+            return ResearchSpec(
+                title="Citation reliability in multi-agent systems",
+                question="How can citation reliability in multi-agent systems be evaluated?",
+                contribution="Operationalizing citation reliability evaluation.",
+                hypotheses=["H1"],
+                keywords=["citation reliability", "multi-agent systems", "evaluation"],
+            )
+
         async def discover_papers(self, query, venue_sources=()):
             del query, venue_sources
             from scholaros.domain import Paper
 
             return [
                 Paper(
-                    title="A Model-Discovered Research Paper",
+                    title="Evaluating Citation Reliability in Multi-Agent Systems",
                     authors=[],
                     year=2026,
                     abstract="Model-discovered abstract retained for a traceable evidence entry.",
@@ -615,10 +645,62 @@ async def test_project_search_saves_model_discovery_as_evidence(settings) -> Non
     evidence = next(
         item
         for item in completed.state["evidence"]
-        if item["paper_title"] == "A Model-Discovered Research Paper"
+        if item["paper_title"] == "Evaluating Citation Reliability in Multi-Agent Systems"
     )
     assert "Model-discovered abstract" in evidence["summary"]
     assert any("模型补充发现" in item for item in evidence["caveats"])
+
+
+
+
+async def test_project_search_filters_unrelated_model_discovery(settings) -> None:
+    class UnrelatedWriter(ResearchWriter):
+        async def scope(self, idea, documents=(), configuration=None, instruction=""):
+            del idea, documents, configuration, instruction
+            from scholaros.domain import ResearchSpec
+
+            return ResearchSpec(
+                title="T", question="Q", contribution="C", hypotheses=[],
+                keywords=["multi-agent systems"],
+            )
+
+        async def discover_papers(self, query, venue_sources=()):
+            del query, venue_sources
+            from scholaros.domain import Paper
+
+            return [
+                Paper(
+                    title="Unrelated Quantum Biology",
+                    authors=[],
+                    year=2020,
+                    abstract="A paper from an unrelated field.",
+                    sources=["llm_discovery"],
+                    external_id="llm:unrelated",
+                )
+            ]
+
+    flow = ResearchWorkflow(
+        settings,
+        search=PaperSearchService([]),
+        writer=UnrelatedWriter(),
+        allow_empty_search=True,
+    )
+    project = flow.create_project("验证无关的模型补充论文被相关性过滤")
+
+    completed = await flow.run(project.id)
+
+    assert completed.state["llm_discovery_count"] == 0
+    assert not any(item["sources"] == ["llm_discovery"] for item in completed.state["papers"])
+
+
+def test_reference_target_instruction() -> None:
+    from scholaros.writing import _reference_target_instruction
+
+    assert "约 30 条" in _reference_target_instruction(
+        {"reference_count_mode": "custom", "reference_count": 30}
+    )
+    assert _reference_target_instruction({"reference_count_mode": "venue_average", "reference_count": None}) == ""
+    assert _reference_target_instruction(None) == ""
 
 
 def test_learning_and_figure_artifacts_are_json(settings) -> None:

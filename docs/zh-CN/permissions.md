@@ -61,7 +61,7 @@ ScholarOS 只提供科研辅助。检索结果、证据摘要、方法建议和�
 - 网页连接状态或 `http://127.0.0.1:8000/health` 中 `ieee.available=true` 只表示 ScholarOS 已读取到 Key，不证明 IEEE 已激活。真正状态以 IEEE 激活邮件和首次检索响应为准；401/403 会提示“尚未激活、无效或无权访问”。不要把 `.env` 或 Key 提交到 Git。
 - Metadata Search API 与 Open Access/付费全文 API 是不同权限层。
 - 学校/机构网页订阅不自动等于 API 批量全文授权。学校登录适合在浏览器中阅读或下载你获准访问的单篇论文；若要让 ScholarOS 自动取回订阅全文，需由图书馆或 IEEE 另行确认 Full-Text/TDM 授权。
-- IEEE 当前 [API Terms of Use](https://developer.ieee.org/API_Terms_of_Use2) 对把 Content 用于 AI/LLM 和数据挖掘设有限制。为避免未经授权把 IEEE 元数据或摘要发送给模型，当前 `ieee` 只能用于 `scholaros search` 或网页“跨源论文检索”，不能加入 Idea→论文工作流。
+- IEEE 当前 [API Terms of Use](https://developer.ieee.org/API_Terms_of_Use2) 对把 Content 用于 AI/LLM 和数据挖掘设有限制。为避免未经授权把 IEEE 元数据或摘要发送给模型，当前 `ieee` 只能用于命令行 `scholaros search` 或 `/api/search` 接口，不能加入 Idea→论文工作流。
 - 若 IEEE 或学校图书馆为你的具体研究出具书面许可，再增加显式 opt-in 的 AI connector；不要仅凭学校网页登录推定已经获得该许可。
 
 ### 经 Crossref 获取 IEEE 书目元数据

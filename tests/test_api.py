@@ -176,7 +176,7 @@ def test_web_assets_and_document_upload(settings) -> None:
         assert "按需加载" not in home.text
         assert "https://cdn.jsdelivr.net/npm/mermaid@11.12.1/dist/mermaid.min.js" in home.text
         assert "Mermaid + 可读表格" in home.text
-        assert "从问题收敛、跨源检索、证据账本到方法与草稿辅助" in home.text
+        assert "从问题收敛、候选文献收集、证据账本到方法与草稿辅助" in home.text
         assert "让研究过程" not in home.text
         assert "跨源论文检索</h2>" not in home.text
         assert "QUESTION → EVIDENCE → METHOD" in home.text
@@ -187,21 +187,21 @@ def test_web_assets_and_document_upload(settings) -> None:
         assert "async function createProject" in script.text
         assert "async function deleteCurrentProject" in script.text
         assert "async function confirmSearchPlan" in script.text
-        assert "setSearchBusy" in script.text
+        assert "setSearchBusy" not in script.text
         assert 'role="status"' in home.text
         assert "Semantic Scholar" in script.text
         assert "IEEE 书目元数据" in script.text
         assert "async function rejectSearchPlan" in script.text
         assert "/confirm-search" in script.text
         assert "/reject-search" in script.text
-        assert "function externalPaperLink" in script.text
-        assert "function renderSearchPlan" in script.text
-        assert "function updateSearchField" in script.text
-        assert "plan.matching_policy" in script.text
-        assert "result.google_scholar_query" in script.text
-        assert "严格匹配排除" in script.text
+        assert "function externalPaperLink" not in script.text
+        assert "function renderSearchPlan" not in script.text
+        assert "function updateSearchField" not in script.text
+        assert "plan.matching_policy" not in script.text
+        assert "result.google_scholar_query" not in script.text
+        assert "严格匹配排除" not in script.text
         assert "模型已配置 · ${health.model_name}" in script.text
-        assert "检索失败，请查看页面中的错误说明。" in script.text
+        assert "检索失败，请查看页面中的错误说明。" not in script.text
         assert "quality_checks_passed" in script.text
         assert "function renderMermaidPreview" in script.text
         assert "function buildTablePreview" in script.text
@@ -211,7 +211,7 @@ def test_web_assets_and_document_upload(settings) -> None:
         assert "securityLevel: \"strict\"" in script.text
         assert "shouldRerunGuided" in script.text
         assert "failure.suggestion" in script.text
-        assert "可稍后重试" in script.text
+        assert "可稍后重试" not in script.text
         assert "/run?restart=" in script.text
 
         created = client.post(

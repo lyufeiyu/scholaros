@@ -8,17 +8,18 @@ from scholaros.domain import Evidence, ReviewFinding, ReviewReport
 
 
 class PaperReviewer:
-    required_sections = [
-        "摘要",
-        "引言",
-        "相关工作",
-        "研究问题",
-        "方法",
-        "实验设计",
-        "局限",
-        "结论",
-        "参考文献",
-    ]
+    # 每项必需章节的中英文别名；用于同时支持中文、英文与中英双语草稿。
+    section_aliases = {
+        "摘要": ("摘要", "abstract", "summary"),
+        "引言": ("引言", "introduction"),
+        "相关工作": ("相关工作", "related work"),
+        "研究问题": ("研究问题", "research question", "research problem"),
+        "方法": ("方法", "method"),
+        "实验设计": ("实验设计", "experimental design", "experiment design"),
+        "局限": ("局限", "limitations", "limitation"),
+        "结论": ("结论", "conclusion"),
+        "参考文献": ("参考文献", "references", "bibliography"),
+    }
 
     def review(
         self,
@@ -29,9 +30,10 @@ class PaperReviewer:
     ) -> ReviewReport:
         findings: list[ReviewFinding] = []
         headings = re.findall(r"^#{1,6}\s+(.+)$", markdown, re.MULTILINE)
+        headings_lower = [heading.lower() for heading in headings]
         missing_sections = []
-        for required in self.required_sections:
-            if not any(required in heading for heading in headings):
+        for required, aliases in self.section_aliases.items():
+            if not any(any(alias in heading for alias in aliases) for heading in headings_lower):
                 missing_sections.append(required)
                 findings.append(
                     ReviewFinding(
@@ -82,16 +84,29 @@ class PaperReviewer:
             )
 
         method_requirements = (
-            r"纳入.{0,12}排除|排除.{0,12}纳入",
-            r"主要(?:指标|结局)",
-            r"分析计划|统计模型",
-            r"失败条件|停止标准|证伪",
+            r"纳入.{0,12}排除|排除.{0,12}纳入|inclusion.{0,24}exclusion|exclusion.{0,24}inclusion",
+            r"主要(?:指标|结局)|primary\s+(?:outcome|endpoint|metric)|main\s+(?:outcome|metric)",
+            r"分析计划|统计模型|analysis\s+plan|statistical\s+(?:model|analysis)",
+            r"失败条件|停止标准|证伪|stopping\s+(?:rule|criterion|criteria)|falsif",
         )
         method_text = _sections_matching(
-            markdown, lambda heading: any(term in heading for term in ("方法", "实验设计", "分析计划"))
+            markdown,
+            lambda heading: any(
+                term in heading.lower()
+                for term in (
+                    "方法",
+                    "实验设计",
+                    "分析计划",
+                    "method",
+                    "experimental design",
+                    "experiment design",
+                    "analysis plan",
+                    "statistical",
+                )
+            ),
         )
         method_complete = bool(method_text) and all(
-            re.search(pattern, method_text) for pattern in method_requirements
+            re.search(pattern, method_text, re.IGNORECASE) for pattern in method_requirements
         )
         if not method_complete:
             findings.append(
@@ -105,13 +120,25 @@ class PaperReviewer:
 
         responsibility_text = _sections_matching(
             markdown,
-            lambda heading: "研究者责任" in heading
-            and ("AI" in heading.upper() or "人工智能" in heading),
+            lambda heading: (
+                "研究者责任" in heading and ("AI" in heading.upper() or "人工智能" in heading)
+            )
+            or ("responsibility" in heading.lower() and "ai" in heading.lower()),
         )
-        has_responsibility_statement = "最终责任" in responsibility_text and (
-            "人工核验" in responsibility_text
-            or "研究者核验" in responsibility_text
-            or "人工审阅" in responsibility_text
+        responsibility_lower = responsibility_text.lower()
+        has_responsibility_statement = (
+            "最终责任" in responsibility_text
+            and (
+                "人工核验" in responsibility_text
+                or "研究者核验" in responsibility_text
+                or "人工审阅" in responsibility_text
+            )
+        ) or (
+            "final responsibility" in responsibility_lower
+            and any(
+                term in responsibility_lower
+                for term in ("verify", "verification", "manually", "human review")
+            )
         )
         responsibility_complete = bool(responsibility_text) and has_responsibility_statement
         if not responsibility_complete:
@@ -126,7 +153,9 @@ class PaperReviewer:
 
         suspicious_lines = []
         result_claim = re.compile(
-            r"(?:本研究|本文实验|实验结果|实验表明|结果表明|我们(?:的)?方法|本系统|准确率)"
+            r"(?:本研究|本文实验|实验结果|实验表明|结果表明|我们(?:的)?方法|本系统|准确率|"
+            r"our\s+(?:method|system|approach|model)|the\s+proposed\s+(?:method|system|approach|model)|"
+            r"experiments?\s+(?:show|demonstrate|indicate|reveal)|results?\s+(?:show|indicate|demonstrate))"
             r".{0,100}(?:\d+(?:\.\d+)?\s*%|\bp\s*[<=>]\s*0?\.\d+)",
             re.IGNORECASE,
         )
@@ -136,7 +165,11 @@ class PaperReviewer:
             r".{0,60}?[-+]?\d+(?:\.\d+)?",
             re.IGNORECASE,
         )
-        current_study_claim = re.compile(r"本研究|本文实验|我们(?:的)?方法|本系统")
+        current_study_claim = re.compile(
+            r"本研究|本文实验|我们(?:的)?方法|本系统|"
+            r"our\s+(?:method|system|approach|model)|the\s+proposed\s+(?:method|system|approach|model)|"
+            r"experiments?\s+(?:show|demonstrate|indicate|reveal)|results?\s+(?:show|indicate|demonstrate)"
+        )
         results_section_text = _sections_matching(
             markdown,
             lambda heading: bool(
@@ -145,7 +178,6 @@ class PaperReviewer:
         )
         results_section_lines = set(results_section_text.splitlines())
         for line in markdown.splitlines():
-            # 带证据键的一般文献结果可以跳过，但当前研究的结果不能靠引用键放行。
             looks_like_result = (
                 result_claim.search(line)
                 or metric_claim.search(line)
@@ -227,19 +259,24 @@ def _body_before_references(markdown: str) -> str:
 
 def _has_complete_design_sections(markdown: str, kind: str) -> bool:
     sections: dict[int, str] = {}
-    pattern = re.compile(rf"^{kind}\s*([12一二])\s*设计说明(?:\s*[:：].*)?$")
+    token = "图" if kind == "图" else "表"
+    english = "figure" if kind == "图" else "table"
+    pattern = re.compile(
+        rf"^(?:{token}|{english})\s*([12一二])\s*(?:设计说明|design(?:\s+notes)?|design\s+description)(?:\s*[:：].*)?$",
+        re.IGNORECASE,
+    )
     aliases = {"1": 1, "一": 1, "2": 2, "二": 2}
     for heading, body in _section_entries(markdown):
         if match := pattern.match(heading.strip()):
-            sections[aliases[match.group(1)]] = body
+            sections[aliases[match.group(1).lower()]] = body
     required_terms = (
-        ("目的", "构成", "视觉编码", "图注")
+        ("目的", "构成", "视觉编码", "图注", "purpose", "composition", "visual encoding", "caption")
         if kind == "图"
-        else ("字段", "用途", "行设计", "分组", "标记规则")
+        else ("字段", "用途", "行设计", "分组", "标记规则", "fields", "purpose", "row design", "grouping")
     )
     return all(
         len(re.sub(r"\s+", "", sections.get(number, ""))) >= 40
-        and sum(term in sections[number] for term in required_terms) >= 2
+        and sum(term in sections[number].lower() for term in required_terms) >= 2
         for number in (1, 2)
     )
 

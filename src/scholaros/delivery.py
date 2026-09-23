@@ -47,6 +47,7 @@ def prepare_delivery(project: Project, store: ProjectStore) -> dict[str, Any]:
     ]
     missing_formats = [item for item in requested if item not in available_formats]
     blockers = []
+    warnings = []
     if not project.state.get("final_review", {}).get("passed"):
         blockers.append("最终质量检查尚未全部通过。")
     if missing_formats:
@@ -59,7 +60,7 @@ def prepare_delivery(project: Project, store: ProjectStore) -> dict[str, Any]:
     if unresolved:
         blockers.append(f"仍有 {len(unresolved)} 条返修意见需要处理。")
     if config["requested_scope"] == "submission_package":
-        blockers.append("作者、单位、伦理、基金和利益冲突元数据需在投稿前由研究者确认。")
+        warnings.append("作者、单位、伦理、基金和利益冲突元数据需在投稿前由研究者确认。")
 
     manuscript_files = [format_names[item] for item in available_formats]
     package_files = list(manuscript_files)
@@ -80,7 +81,7 @@ def prepare_delivery(project: Project, store: ProjectStore) -> dict[str, Any]:
                 "role": _artifact_role(name),
             }
         )
-    template_files = _ieee_template_records() if "tex" in available_formats else []
+    template_files = _ieee_template_records() if "tex" in available_formats and not _contains_cjk(markdown) else []
     manifest = {
         "schema_version": 1,
         "project_id": project.id,
@@ -91,6 +92,7 @@ def prepare_delivery(project: Project, store: ProjectStore) -> dict[str, Any]:
         "missing_formats": missing_formats,
         "ready": not blockers,
         "blockers": blockers,
+        "warnings": warnings,
         "files": file_records,
         "template_files": template_files,
         "sharing_boundary": _sharing_boundary(config["requested_scope"]),
@@ -213,7 +215,48 @@ def _ieee_package_lines() -> list[str]:
 
 
 def markdown_to_tex(markdown: str) -> str:
-    """将 Markdown 草稿放入本地 IEEEtran 期刊模板骨架；输出统一为英文 IEEE 期刊格式。"""
+    """把 Markdown 草稿转为可编辑 LaTeX。
+
+    含中文时使用 ctexart（XeLaTeX）以保证可编译；纯英文稿使用本地 IEEEtran 期刊模板。
+    """
+
+    title, body = _tex_body(markdown)
+    if _contains_cjk(markdown):
+        document_class = "\\documentclass{ctexart}"
+        packages = [
+            "\\usepackage{amsmath,amssymb}",
+            "\\usepackage{graphicx}",
+            "\\usepackage{booktabs}",
+            "\\usepackage{url}",
+            "\\usepackage[hidelinks]{hyperref}",
+        ]
+    else:
+        document_class = _ieee_document_class()
+        packages = _ieee_package_lines()
+        if not packages:
+            packages = [
+                "\\usepackage{amsmath,amssymb}",
+                "\\usepackage{graphicx}",
+                "\\usepackage{booktabs}",
+                "\\usepackage{url}",
+            ]
+        if not any("hyperref" in line for line in packages):
+            packages.append("\\usepackage[hidelinks]{hyperref}")
+    return (
+        f"{document_class}\n"
+        + "\n".join(packages)
+        + "\n"
+        "\\title{" + title + "}\n"
+        "\\author{ScholarOS Research Workspace}\n"
+        "\\begin{document}\n"
+        "\\maketitle\n"
+        + "\n".join(body)
+        + "\n\\end{document}\n"
+    )
+
+
+def _tex_body(markdown: str) -> tuple[str, list[str]]:
+    """提取首个一级标题作为论文标题，并把其余 Markdown 转为 LaTeX 正文行。"""
 
     body: list[str] = []
     title = "ScholarOS Research Manuscript"
@@ -237,27 +280,11 @@ def markdown_to_tex(markdown: str) -> str:
             body.append(f"{_tex_text(line)}\n")
         else:
             body.append("")
-    template_packages = _ieee_package_lines()
-    if not template_packages:
-        template_packages = [
-            "\\usepackage{amsmath,amssymb}",
-            "\\usepackage{graphicx}",
-            "\\usepackage{booktabs}",
-            "\\usepackage{url}",
-        ]
-    if not any("hyperref" in line for line in template_packages):
-        template_packages.append("\\usepackage[hidelinks]{hyperref}")
-    return (
-        f"{_ieee_document_class()}\n"
-        + "\n".join(template_packages)
-        + "\n"
-        "\\title{" + title + "}\n"
-        "\\author{ScholarOS Research Workspace}\n"
-        "\\begin{document}\n"
-        "\\maketitle\n"
-        + "\n".join(body)
-        + "\n\\end{document}\n"
-    )
+    return title, body
+
+
+def _contains_cjk(text: str) -> bool:
+    return bool(re.search(r"[\u3400-\u9fff]", text))
 
 
 def _delivery_zip(project_id: str, store: ProjectStore, manifest: Mapping[str, Any]) -> bytes:

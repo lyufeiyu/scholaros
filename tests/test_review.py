@@ -204,3 +204,41 @@ def test_reviewer_requires_reproducible_method_and_researcher_responsibility() -
     assert any(item.code == "method_reproducibility" for item in report.findings)
     assert any(item.code == "researcher_responsibility" for item in report.findings)
     assert report.metrics["quality_checks"] == 9
+
+
+def test_reviewer_passes_english_draft() -> None:
+    markdown = """# Research Title
+## Abstract
+Research protocol abstract.
+## Introduction
+Background with [@Real2025].
+## Related Work
+Prior work provides evidence.
+## Research Questions
+How to evaluate the method?
+## Methods
+Pre-specified inclusion and exclusion criteria, primary outcomes, an analysis plan, and stopping criteria.
+## Experimental Design
+Controlled experiment.
+## Figure 1 Design Notes
+Purpose, composition, visual encoding, and caption. """ + ("x" * 80) + """
+## Figure 2 Design Notes
+Purpose, composition, visual encoding, and caption. """ + ("x" * 80) + """
+## Table 1 Design Notes
+Fields, purpose, row design, and grouping. """ + ("x" * 80) + """
+## Table 2 Design Notes
+Fields, purpose, row design, and grouping. """ + ("x" * 80) + """
+## Limitations
+Discussed limitations.
+## Conclusion
+Awaiting researcher verification.
+## Researcher Responsibility and AI Assistance
+The system only assists. The researcher manually verifies evidence and bears final responsibility for evidence, methods, results, authorship, and submission.
+## References
+- [@Real2025] Real paper
+""" + ("Body " * 1500)
+    evidence = [Evidence("Real2025", "Real", "Summary", [], [], None)]
+
+    report = PaperReviewer().review(markdown, evidence)
+
+    assert report.passed, [item.code for item in report.findings]

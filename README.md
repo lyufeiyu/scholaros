@@ -6,12 +6,12 @@ A research assistant workspace for traceable evidence, method design, and writin
 
 **English** | [简体中文](./README.zh-CN.md)
 
-[![Version](https://img.shields.io/badge/version-0.3.0-456B93)](./pyproject.toml)
+[![Version](https://img.shields.io/badge/version-0.3.1-456B93)](./pyproject.toml)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](./LICENSE)
 [![Checks](https://img.shields.io/badge/checks-run_locally-586069)](./scripts/check.sh)
 
-[Quick start](#quick-start) · [News](#news) · [Features](#features) · [Search](#search) · [Architecture](#architecture-overview) · [Documentation](#documentation) · [Contributing](./CONTRIBUTING.md)
+[Quick start](#quick-start) · [News](#news) · [Features](#features) · [Architecture](#architecture-overview) · [Documentation](#documentation) · [Contributing](./CONTRIBUTING.md)
 
 </div>
 
@@ -23,9 +23,21 @@ Question → Scope → Search → Evidence → Design → Draft → Review → R
 
 The terminal CLI and Web workspace share the same workflow. ScholarOS produces candidate research designs, evidence records, and research drafts; final judgment and academic responsibility remain with the researcher. When no experimental data is supplied, it produces a research protocol and figure/table design notes rather than invented results.
 
-## 📰 News
+## 📢 News
 
-### September 22, 2026 · v0.3.0 — Interactive research workspace
+<details>
+<summary>September 23, 2026 · v0.3.1 — Consistency fixes and multilingual support</summary>
+
+- README no longer advertises the removed standalone cross-source paper search; the workflow's research-materials stage is described instead.
+- English and bilingual research drafts now pass the nine deterministic quality checks correctly.
+- LaTeX output containing Chinese now uses `ctexart` (XeLaTeX); pure-English drafts keep the IEEEtran journal template.
+- The submission package is no longer unconditionally blocked by the author/ethics metadata reminder.
+- Model-discovered papers in the workflow now pass the same relevance filter as fixed sources.
+
+</details>
+
+<details>
+<summary>September 22, 2026 · v0.3.0 — Interactive research workspace</summary>
 
 - Stage-by-stage interaction is now the default for Web, CLI, and terminal entry points; use `--automatic` when you explicitly want one-step execution.
 - Running projects can be interrupted and resumed from the saved checkpoint.
@@ -34,13 +46,15 @@ The terminal CLI and Web workspace share the same workflow. ScholarOS produces c
 - The Web workspace uses a calm blue-gray visual theme and a simplified project/material overview; API documentation remains available at `/docs`.
 - LaTeX output uses the local English IEEEtran journal template stored under `templates/ieee/`.
 
+</details>
+
 ## Screenshots
 
 <table>
   <tr>
-    <td width="33.33%" align="center"><a href="./images/ScholarOSv0.3.0-home.jpg"><img src="./images/ScholarOSv0.3.0-home.jpg" width="100%" alt="ScholarOS home workspace"></a><br><sub>Home</sub></td>
-    <td width="33.33%" align="center"><a href="./images/ScholarOSv0.3.0-project.jpg"><img src="./images/ScholarOSv0.3.0-project.jpg" width="100%" alt="ScholarOS project workspace"></a><br><sub>Project</sub></td>
-    <td width="33.33%" align="center"><a href="./images/ScholarOSv0.3.0-detail.jpg"><img src="./images/ScholarOSv0.3.0-detail.jpg" width="100%" alt="ScholarOS project detail"></a><br><sub>Detail</sub></td>
+    <td width="33.33%" align="center"><a href="./images/ScholarOSv0.3.1-home.jpg"><img src="./images/ScholarOSv0.3.1-home.jpg" width="100%" alt="ScholarOS home workspace"></a><br><sub>Home</sub></td>
+    <td width="33.33%" align="center"><a href="./images/ScholarOSv0.3.1-project.jpg"><img src="./images/ScholarOSv0.3.1-project.jpg" width="100%" alt="ScholarOS project workspace"></a><br><sub>Project</sub></td>
+    <td width="33.33%" align="center"><a href="./images/ScholarOSv0.3.1-detail.jpg"><img src="./images/ScholarOSv0.3.1-detail.jpg" width="100%" alt="ScholarOS project detail"></a><br><sub>Detail</sub></td>
   </tr>
 </table>
 
@@ -56,14 +70,13 @@ ScholarOS is a research assistance tool, not an autonomous paper author, and mus
 ## Features
 
 - Assists with problem definition, hypotheses, method design, evidence ledgers, and Markdown research drafts.
-- Supports six work types: build from materials, rewrite, integrity audit, independent review, revision, and target transfer. Project configuration records venue/scene, language, research boundary, author voice, learning targets, reference target, figure policy, and delivery formats.
+- Supports six work types: build from materials, rewrite, integrity audit, independent review, revision, and target transfer. Project configuration records venue/scene, language, research boundary, author voice, learning targets, reference target, and figure policy.
 - Accepts PDF, DOCX, TXT, Markdown, TeX, BibTeX, CSV, and JSON as references or experimental result materials.
-- Searches arXiv, OpenAlex, Crossref, Semantic Scholar, DBLP, ACM metadata, and optional IEEE Xplore in parallel.
-- Supports topic, natural-language, exact title, author, DOI, and venue searches; author searches can combine affiliation, topic, and venue constraints.
+- Gathers and deduplicates candidate papers in the research-materials stage from arXiv, OpenAlex, Crossref, Semantic Scholar, DBLP, and ACM metadata.
 - Shows a search-plan confirmation for projects with uploaded references and for guided projects; reports each source failure separately.
 - Runs nine deterministic checks on both the initial and revised draft: section structure, evidence availability, in-text citations, method elements, figure design, table design, result provenance, researcher-responsibility statement, and draft depth.
 - Uses stage-by-stage checkpoints by default, supports explicit interruption and resume, and automatically saves a version after every completed stage and after final completion.
-- Keeps one editable contribution blueprint, detailed evidence files, figure/table plans, stage-confirmed revisions, and a read-only version timeline in the same project; affected downstream artifacts remain stale until regenerated.
+- Keeps one reviewable contribution blueprint, detailed evidence files, figure/table plans, stage-confirmed revisions, and a read-only version timeline in the same project; affected downstream artifacts remain stale until regenerated.
 - Prepares editable Markdown and English IEEEtran LaTeX outputs plus a hash manifest and local ZIP. Markdown can be previewed as a paper and printed to PDF from the project page; local delivery never means automatic submission.
 
 ## Quick start
@@ -143,44 +156,13 @@ The launcher only invokes an installed Conda environment. It does not create an 
 SCHOLAROS_CONDA_ENV=my-research-env ./scholaros.sh serve
 ```
 
-## Search
-
-### Topic or natural-language search
-
-```bash
-scholaros search "How can research agents reduce citation errors?" --natural-language
-```
-
-Natural-language mode displays the original question, model-generated English search phrases, and the final query sent to paper sources. If the model is unavailable, ScholarOS reports the error instead of pretending that a translation was generated.
-
-### Author search with combined constraints
-
-```bash
-scholaros search "Wei Wang" --field author \
-  --affiliation "Shenzhen University" \
-  --topic "computer vision" \
-  --venue CVPR
-```
-
-Author, affiliation, topic, and venue are combined with AND semantics. OpenAlex, Crossref/ACM, and IEEE receive the constraints they support; Semantic Scholar verifies candidates within a bounded pagination budget. arXiv and DBLP explicitly skip an affiliation constraint when the current adapter cannot verify the author–affiliation relationship.
-
-### Exact fields and venues
-
-```bash
-scholaros search CVPR --field venue
-scholaros search "Attention Is All You Need" --field title
-scholaros search "10.1145/1234567" --field doi --source acm
-```
-
-Results include a landing page, DOI link, and open PDF link when available. ScholarOS does not scrape Google Scholar; it provides a manual supplemental search link. No single index can promise complete coverage of everything discoverable through Google Scholar.
-
 ## Web workspace
 
 ```bash
 scholaros serve
 ```
 
-Open `http://127.0.0.1:8000`; API documentation is available at `/docs`. The Web workspace supports full project intake, document upload, a directly editable contribution blueprint, outbound search-plan confirmation, stage-by-stage confirmed edits, detailed evidence files and figure/table plans, Markdown/LaTeX source preview, quality findings, interruption/resume, automatic version timelines, read-only historical project views, and project deletion. See [Project workbench and delivery](./docs/workbench.md).
+Open `http://127.0.0.1:8000`; API documentation is available at `/docs`. The Web workspace supports full project intake, document upload, a reviewable contribution blueprint, outbound search-plan confirmation, stage-by-stage confirmed edits, detailed evidence files and figure/table plans, Markdown/LaTeX source preview, quality findings, interruption/resume, automatic version timelines, read-only historical project views, and project deletion. See [Project workbench and delivery](./docs/workbench.md).
 
 ## Project data and output
 

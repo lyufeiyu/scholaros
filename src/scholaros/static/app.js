@@ -44,20 +44,6 @@ const statusLabels = {
   needs_attention: "需人工处理",
   failed: "运行失败",
 };
-const searchFieldLabels = {
-  all: "综合主题",
-  title: "论文标题",
-  author: "作者姓名",
-  doi: "DOI",
-  venue: "期刊 / 会议",
-};
-const searchFieldHints = {
-  all: "按有效词项覆盖率过滤宽泛结果；可启用自然语言理解。",
-  title: "请输入完整论文标题；规范化大小写、重音和一般标点，C++/C#/F# 等技术符号仍会区分。",
-  author: "请输入作者全名；姓氏和后缀须一致，仅结果侧名字可缩写为 G. Hinton。",
-  doi: "按 DOI 字段检索，可输入 10.xxxx/xxxx 或完整 DOI 链接。",
-  venue: "普通期刊请输入完整名称；顶会可输入 CVPR、AAAI、NIPS/NeurIPS 等简称。",
-};
 const artifactLabels = {
   "learning-plan.json": "文献学习计划",
   "contribution-blueprint.json": "研究贡献方案",
@@ -130,8 +116,8 @@ function showView(name) {
   }
 }
 
-function renderSourceOptions(containerId) {
-  const container = element(containerId);
+function renderSourceOptions() {
+  const container = element("createSources");
   container.replaceChildren();
   const sources = state.health?.sources || [];
   for (const source of sources) {
@@ -141,46 +127,16 @@ function renderSourceOptions(containerId) {
     const input = document.createElement("input");
     input.type = "checkbox";
     input.value = source.name;
-    const workflowRestricted = containerId === "createSources" && source.workflow_eligible === false;
-    const searchableUnavailableIeee = containerId === "searchSources" && source.name === "ieee";
-    input.checked = !workflowRestricted && (source.available || searchableUnavailableIeee);
-    input.disabled = workflowRestricted || (!source.available && !searchableUnavailableIeee);
+    input.checked = source.available;
+    input.disabled = !source.available;
     const text = document.createElement("span");
     const sourceName = {
       semantic_scholar: "Semantic Scholar",
       ieee_metadata: "IEEE 书目元数据",
       ieee: "IEEE Xplore",
     }[source.name] || source.name.toUpperCase();
-    const displayName = containerId === "createSources" && source.name === "ieee"
-      ? "ieee_metadata"
-      : sourceName;
-    text.textContent = source.name === "ieee" && containerId !== "createSources"
-      ? `${sourceName} · ${source.available ? "已配置 API" : "未配置 API，改用 ieee_metadata 书目元数据"}`
-      : displayName;
+    text.textContent = sourceName;
     if (!source.available) text.title = source.status || "缺少所需 API Key";
-    else if (workflowRestricted) text.title = source.name === "ieee"
-      ? "受 IEEE API 条款限制，仅用于独立检索"
-      : "该来源仅用于独立检索，不会进入自动写作链路";
-    label.append(input, text);
-    container.append(label);
-  }
-}
-
-const venueSourceNames = ["CVPR", "ICCV", "ECCV", "NeurIPS", "ICML", "ICLR", "AAAI", "IJCAI", "ACL", "EMNLP", "KDD"];
-
-function renderVenueOptions() {
-  const container = element("venueSources");
-  if (!container) return;
-  container.replaceChildren();
-  for (const venue of venueSourceNames) {
-    const label = document.createElement("label");
-    label.className = "source-option";
-    const input = document.createElement("input");
-    input.type = "checkbox";
-    input.value = venue;
-    input.checked = true;
-    const text = document.createElement("span");
-    text.textContent = venue;
     label.append(input, text);
     container.append(label);
   }
@@ -193,7 +149,7 @@ function selectedSources(containerId) {
 async function loadHealth() {
   const health = await api("/health");
   state.health = health;
-  element("brandVersion").textContent = `v${health.version || "0.3.0"}`;
+  element("brandVersion").textContent = `v${health.version || "0.3.1"}`;
   const status = element("systemStatus");
   status.classList.add("is-on");
   status.lastChild.textContent = " 服务已连接";
@@ -221,7 +177,7 @@ async function loadHealth() {
       sourceStatus.append(chip);
     }
   }
-  renderSourceOptions("createSources");
+  renderSourceOptions();
 }
 
 async function loadProjects() {
@@ -1708,211 +1664,6 @@ function appendInlineMarkdown(container, text) {
     cursor = match.index + token.length;
   }
   if (cursor < text.length) container.append(document.createTextNode(text.slice(cursor)));
-}
-
-async function searchPapers(event) {
-  event.preventDefault();
-  const button = element("searchButton");
-  const feedback = element("searchFeedback");
-  const query = element("searchQuery").value.trim();
-  const field = element("searchField").value;
-  const naturalLanguage = element("naturalLanguageSearch").checked;
-  const authorAffiliation = field === "author" ? element("authorAffiliation").value.trim() : "";
-  const authorTopic = field === "author" ? element("authorTopic").value.trim() : "";
-  const authorVenue = field === "author" ? element("authorVenue").value.trim() : "";
-  const sources = selectedSources("searchSources");
-  const venues = selectedSources("venueSources");
-  if (query.length < 2) return;
-  if (!sources.length) {
-    feedback.textContent = "请至少选择一个论文源。";
-    toast("请至少选择一个论文源。", true);
-    return;
-  }
-  setSearchBusy(true);
-  feedback.classList.remove("is-error");
-  feedback.textContent = "正在并行查询所选论文源…";
-  element("searchResults").replaceChildren();
-  element("searchPlan").hidden = true;
-  element("googleScholarLink").hidden = true;
-  try {
-    const result = await api("/api/search", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        query,
-        sources,
-        limit: 30,
-        natural_language: naturalLanguage,
-        field,
-        author_affiliation: authorAffiliation || null,
-        author_topic: authorTopic || null,
-        author_venue: authorVenue || null,
-        venue_sources: venues,
-      }),
-    });
-    renderSearchResults(result);
-    renderSearchPlan(result.search_plan);
-    const filtered = result.filtered_out ? `，严格匹配排除 ${result.filtered_out} 条宽泛候选` : "";
-    const discovered = result.papers.filter((paper) => (paper.sources || []).includes("llm_discovery")).length;
-    feedback.textContent = `找到 ${result.papers.length} 篇去重论文${filtered}${discovered ? `，其中 ${discovered} 篇由模型补充发现` : ""}${result.failures.length ? `，${result.failures.length} 个来源已降级` : ""}。`;
-    const scholarLink = element("googleScholarLink");
-    scholarLink.href = `https://scholar.google.com/scholar?q=${encodeURIComponent(result.google_scholar_query || result.search_query)}`;
-    scholarLink.hidden = false;
-  } catch (error) {
-    feedback.classList.add("is-error");
-    feedback.textContent = `检索失败：${error.message}`;
-    toast("检索失败，请查看页面中的错误说明。", true);
-  } finally {
-    setSearchBusy(false);
-  }
-}
-
-function setSearchBusy(busy) {
-  setBusy(element("searchButton"), busy, "正在检索…");
-  document.querySelectorAll("#venueSources input").forEach((input) => {
-    input.disabled = busy;
-  });
-}
-
-function renderSearchPlan(plan) {
-  const container = element("searchPlan");
-  container.replaceChildren();
-  container.append(searchPlanRow("检索字段", searchFieldLabels[plan.field] || plan.field));
-  container.append(searchPlanRow("原始输入", plan.input_query));
-  if (plan.natural_language) {
-    const terms = document.createElement("div");
-    terms.className = "search-term-list";
-    for (const value of plan.search_terms) {
-      const term = document.createElement("span");
-      term.className = "search-term";
-      term.textContent = value;
-      terms.append(term);
-    }
-    container.append(searchPlanRow("模型生成的英文词组", terms));
-  }
-  container.append(searchPlanRow("最终发送的检索式", plan.search_query));
-  if (plan.field === "author" && plan.author_filters) {
-    const filters = [
-      plan.author_filters.affiliation && `机构：${plan.author_filters.affiliation}`,
-      plan.author_filters.topic && `主题：${plan.author_filters.topic}`,
-      plan.author_filters.venue && `会议：${plan.author_filters.venue}`,
-    ].filter(Boolean);
-    container.append(searchPlanRow("作者附加条件", filters.join("；") || "未限制"));
-  }
-  container.append(searchPlanRow("匹配规则", plan.matching_policy));
-  container.hidden = false;
-}
-
-function searchPlanRow(label, value) {
-  const row = document.createElement("div");
-  row.className = "search-plan-row";
-  const heading = document.createElement("strong");
-  heading.textContent = label;
-  const content = value instanceof Node ? value : document.createElement("span");
-  if (!(value instanceof Node)) content.textContent = value;
-  row.append(heading, content);
-  return row;
-}
-
-function updateSearchField() {
-  const field = element("searchField").value;
-  const natural = element("naturalLanguageSearch");
-  const directOnly = field !== "all";
-  if (directOnly) natural.checked = false;
-  natural.disabled = directOnly;
-  element("authorFilters").hidden = field !== "author";
-  element("searchFieldHint").textContent = searchFieldHints[field];
-  element("searchQuery").placeholder = {
-    all: "例如：如何减少科研智能体生成的错误引用？",
-    title: "例如：Attention Is All You Need",
-    author: "例如：Geoffrey Hinton",
-    doi: "例如：10.1145/1234567",
-    venue: "例如：CVPR、AAAI、NeurIPS / NIPS 或完整会议名称",
-  }[field];
-}
-
-function renderSearchResults(result) {
-  const container = element("searchResults");
-  container.replaceChildren();
-  for (const paper of result.papers) {
-    const card = document.createElement("article");
-    card.className = "paper-card";
-    const header = document.createElement("div");
-    header.className = "paper-card-header";
-    const copy = document.createElement("div");
-    const heading = document.createElement("h3");
-    const landingUrl = safeExternalUrl(paper.landing_url) || doiUrl(paper.doi);
-    const pdfUrl = safeExternalUrl(paper.pdf_url);
-    const title = document.createElement(landingUrl ? "a" : "span");
-    title.textContent = paper.title;
-    if (landingUrl) {
-      title.href = landingUrl;
-      title.target = "_blank";
-      title.rel = "noreferrer";
-    }
-    heading.append(title);
-    const meta = document.createElement("div");
-    meta.className = "paper-card-meta";
-    const authors = (paper.authors || []).slice(0, 4).join("、") || "作者未知";
-    const venue = paper.venue ? ` · ${paper.venue}` : "";
-    const paperSources = (paper.sources || []).map((source) => source === "llm_discovery" ? "模型发现" : source);
-    meta.textContent = `${authors}${paper.authors?.length > 4 ? " 等" : ""} · ${paper.year || "年份未知"}${venue} · ${paperSources.join(" / ")}`;
-    copy.append(heading, meta);
-    const badges = document.createElement("div");
-    badges.className = "paper-badges";
-    if (paper.is_open_access) {
-      const oa = document.createElement("span");
-      oa.className = "paper-badge is-oa";
-      oa.textContent = "Open Access";
-      badges.append(oa);
-    }
-    if (paper.doi) {
-      const doi = document.createElement("span");
-      doi.className = "paper-badge";
-      doi.textContent = "DOI";
-      badges.append(doi);
-    }
-    header.append(copy, badges);
-    card.append(header);
-    if (paper.abstract) {
-      const abstract = document.createElement("p");
-      abstract.textContent = paper.abstract;
-      card.append(abstract);
-    }
-    if (landingUrl || pdfUrl) {
-      const links = document.createElement("div");
-      links.className = "paper-links";
-      if (landingUrl) links.append(externalPaperLink("网页 / DOI ↗", landingUrl));
-      if (pdfUrl && pdfUrl !== landingUrl) links.append(externalPaperLink("开放 PDF ↗", pdfUrl));
-      card.append(links);
-    }
-    container.append(card);
-  }
-  for (const failure of result.failures) {
-    const note = document.createElement("article");
-    note.className = "source-failure";
-    const heading = document.createElement("strong");
-    heading.textContent = `${failure.source} 已跳过：${failure.reason}`;
-    const solution = document.createElement("p");
-    solution.textContent = `应对方案：${failure.suggestion}`;
-    const state = document.createElement("span");
-    state.textContent = failure.retryable ? "可稍后重试" : "需调整后重试";
-    note.append(heading, solution, state);
-    container.append(note);
-  }
-}
-
-function externalPaperLink(label, url) {
-  const link = document.createElement("a");
-  link.textContent = label;
-  link.href = url;
-  link.target = "_blank";
-  link.rel = "noreferrer noopener";
-  return link;
-}
-
-function doiUrl(value) {
-  return value ? `https://doi.org/${value.split("/").map(encodeURIComponent).join("/")}` : null;
 }
 
 function safeExternalUrl(value) {

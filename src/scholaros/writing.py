@@ -336,6 +336,21 @@ hypotheses、independent_variables、dependent_variables、baselines 必须是�
             else "没有 results 角色资料，因此写成研究方案论文/注册报告；不得编造样本数、"
             "性能提升或显著性，用完整的结果报告协议代替虚构结果。"
         )
+        english_output = config.get("output_language") == "en"
+        reference_target = _reference_target_instruction(config)
+        if english_output:
+            section_rule = "Include Title, Abstract, Keywords, Introduction, Related Work, Research Questions/Hypotheses, Methods, Experimental Design, Analysis Plan, Expected Contributions, Limitations and Ethics, Conclusion, Researcher Responsibility and AI Assistance, and References."
+            design_rule = "Include at least two 'Figure X Design Notes' and two 'Table X Design Notes' sections that describe purpose, composition/fields, encoding/caption; do not fabricate figures or table data."
+            method_rule = "Methods must state inclusion/exclusion rules, primary outcomes, an analysis plan, and stopping/falsification criteria."
+            responsibility_rule = "The 'Researcher Responsibility and AI Assistance' section must state clearly that the system only assists; evidence, methods, result interpretation, authorship, and submission decisions are verified by the researcher, who bears final responsibility; disclose AI use per institutional and journal rules."
+            verify_rule = "Use cautious wording for abstract-level evidence and state that original-source verification is required before submission."
+        else:
+            section_rule = "包含标题、摘要、关键词、引言、相关工作、研究问题/假设、方法、实验设计、分析计划、预期贡献、局限与伦理、结论、研究者责任与 AI 辅助说明、参考文献。"
+            design_rule = "至少给出 2 个“图 X 设计说明”和 2 个“表 X 设计说明”，说明目的、构成、编码/字段和图注，但不伪造图片和表格数据。"
+            method_rule = "方法必须写明纳入排除规则、主要指标、分析计划和失败/停止标准。"
+            responsibility_rule = "“研究者责任与 AI 辅助说明”必须明确：系统只提供辅助；证据、方法、结果解释、署名和投稿决定由研究者人工核验并承担最终责任；按机构和期刊规则披露 AI 使用。"
+            verify_rule = "对摘要级证据使用审慎措辞，明确正式投稿前需要原文核验。"
+
         prompt = f"""
 你是 ScholarOS 的研究写作辅助 Agent。请用{language}输出一篇供研究者审阅的 Markdown 研究草稿。
 
@@ -344,6 +359,7 @@ hypotheses、independent_variables、dependent_variables、baselines 必须是�
 作者表达：{voice_instruction}
 研究分析边界：{config.get('research_mode', 'agent_decide')}。
 研究者确认的本阶段修改要求：{instruction or '无'}
+{reference_target}
 
 研究规格：
 {json.dumps(spec.to_dict(), ensure_ascii=False)}
@@ -355,16 +371,13 @@ hypotheses、independent_variables、dependent_variables、baselines 必须是�
 {context}
 
 硬性规则：
-1. 包含标题、摘要、关键词、引言、相关工作、研究问题/假设、方法、实验设计、分析计划、
-   预期贡献、局限与伦理、结论、研究者责任与 AI 辅助说明、参考文献。
+1. {section_rule}
 2. 文内引用只使用证据中的 `[@cite_key]`，不得创造不存在的引用。
 3. {result_instruction}
-4. 至少给出 2 个“图 X 设计说明”和 2 个“表 X 设计说明”，说明目的、构成、编码/字段和图注，
-   但不伪造图片和表格数据。
-5. 对摘要级证据使用审慎措辞，明确正式投稿前需要原文核验。
-6. 方法必须写明纳入排除规则、主要指标、分析计划和失败/停止标准。
-7. “研究者责任与 AI 辅助说明”必须明确：系统只提供辅助；证据、方法、结果解释、署名和
-   投稿决定由研究者人工核验并承担最终责任；按机构和期刊规则披露 AI 使用。
+4. {design_rule}
+5. {verify_rule}
+6. {method_rule}
+7. {responsibility_rule}
 8. 最后原样包含下面的参考文献，不增加新条目：
 
 {references}
@@ -773,6 +786,19 @@ def _references(papers: Sequence[Paper], evidence: Sequence[Evidence]) -> str:
             f"- [@{item.cite_key}] 用户提供资料. *{item.paper_title}*. 本地资料，出版信息待确认。"
         )
     return "\n".join(entries) or "- 当前没有可用参考文献；正式输出前请联网检索并补充。"
+
+
+def _reference_target_instruction(configuration: dict[str, Any] | None) -> str:
+    """把自定义参考文献目标转成对写作 Agent 的软性规划约束。"""
+
+    config = dict(configuration or {})
+    count = config.get("reference_count")
+    if config.get("reference_count_mode") == "custom" and isinstance(count, int) and count:
+        return (
+            f"参考文献规划目标：约 {count} 条；这是规划目标，"
+            "最终以人工核验和实际可用引用为准。"
+        )
+    return ""
 
 
 def _fallback_keywords(idea: str) -> list[str]:

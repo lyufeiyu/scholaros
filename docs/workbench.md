@@ -32,7 +32,7 @@ The draft stage exposes both Markdown and LaTeX source; the LaTeX export uses th
 
 ## Prepare delivery
 
-Use the Web delivery action, the API, or:
+Use the API or:
 
 ```bash
 scholaros delivery PROJECT_ID

@@ -6,12 +6,12 @@
 
 [English](./README.md) | **简体中文**
 
-[![版本](https://img.shields.io/badge/version-0.3.0-456B93)](./pyproject.toml)
+[![版本](https://img.shields.io/badge/version-0.3.1-456B93)](./pyproject.toml)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](./LICENSE)
 [![Checks](https://img.shields.io/badge/checks-run_locally-586069)](./scripts/check.sh)
 
-[快速开始](#快速开始) · [最近更新](#最近更新) · [功能](#功能) · [检索](#检索) · [架构](#架构概览) · [文档](#文档) · [贡献](./CONTRIBUTING.zh-CN.md)
+[快速开始](#快速开始) · [最近更新](#最近更新) · [功能](#功能) · [架构](#架构概览) · [文档](#文档) · [贡献](./CONTRIBUTING.zh-CN.md)
 
 </div>
 
@@ -23,9 +23,21 @@ Question → Scope → Search → Evidence → Design → Draft → Review → R
 
 终端命令行和 Web 工作台共用同一套工作流。系统提供候选研究方案、证据记录和研究草稿，最终判断与学术责任始终由研究者承担。没有实验数据时，只输出研究方案以及图表、表格的设计说明，不生成虚构结果。
 
-## 📰 最近更新
+## 📢 最近更新
 
-### 2026 年 9 月 22 日 · v0.3.0 —— 交互式研究工作台
+<details>
+<summary>2026 年 9 月 23 日 · v0.3.1 —— 一致性修正与多语言支持</summary>
+
+- README 不再把已移除的独立“论文跨源搜索”作为产品功能宣传，改为描述工作流内的研究材料收集。
+- 英文与中英双语研究草稿现在可以正确通过九类确定性质量检查。
+- 含中文内容的 LaTeX 改用 `ctexart`（XeLaTeX）输出；纯英文稿仍使用 IEEEtran 期刊模板。
+- “投稿材料包”不再被作者/伦理元数据的人工提醒无条件阻塞。
+- 工作流中的模型补充论文现在与固定来源一样经过相关性过滤。
+
+</details>
+
+<details>
+<summary>2026 年 9 月 22 日 · v0.3.0 —— 交互式研究工作台</summary>
 
 - Web、CLI 和终端入口默认采用逐阶段交互；明确选择 `--automatic` 时才一步完成。
 - 运行中的项目可以中断，并从保存的断点继续。
@@ -34,13 +46,15 @@ Question → Scope → Search → Evidence → Design → Draft → Review → R
 - Web 工作台改为冷静蓝灰主题，最后阶段聚合为项目与材料总览；API 文档仍可通过 `/docs` 访问。
 - LaTeX 输出统一使用仓库 `templates/ieee/` 中的英文 IEEEtran 期刊模板。
 
+</details>
+
 ## 产品截图
 
 <table>
   <tr>
-    <td width="33.33%" align="center"><a href="./images/ScholarOSv0.3.0-home.jpg"><img src="./images/ScholarOSv0.3.0-home.jpg" width="100%" alt="ScholarOS 首页工作台"></a><br><sub>首页</sub></td>
-    <td width="33.33%" align="center"><a href="./images/ScholarOSv0.3.0-project.jpg"><img src="./images/ScholarOSv0.3.0-project.jpg" width="100%" alt="ScholarOS 项目工作台"></a><br><sub>项目</sub></td>
-    <td width="33.33%" align="center"><a href="./images/ScholarOSv0.3.0-detail.jpg"><img src="./images/ScholarOSv0.3.0-detail.jpg" width="100%" alt="ScholarOS 项目详情"></a><br><sub>详情</sub></td>
+    <td width="33.33%" align="center"><a href="./images/ScholarOSv0.3.1-home.jpg"><img src="./images/ScholarOSv0.3.1-home.jpg" width="100%" alt="ScholarOS 首页工作台"></a><br><sub>首页</sub></td>
+    <td width="33.33%" align="center"><a href="./images/ScholarOSv0.3.1-project.jpg"><img src="./images/ScholarOSv0.3.1-project.jpg" width="100%" alt="ScholarOS 项目工作台"></a><br><sub>项目</sub></td>
+    <td width="33.33%" align="center"><a href="./images/ScholarOSv0.3.1-detail.jpg"><img src="./images/ScholarOSv0.3.1-detail.jpg" width="100%" alt="ScholarOS 项目详情"></a><br><sub>详情</sub></td>
   </tr>
 </table>
 
@@ -56,14 +70,13 @@ ScholarOS 是科研辅助工具，不是自动论文作者，也不应被用于�
 ## 功能
 
 - 辅助形成问题定义、假设、方法设计、证据账本和 Markdown 研究草稿。
-- 支持由材料成稿、重写、科研诚信核查、独立审阅、按意见返修和适配新目标六类任务；项目配置记录目标场景、语言、研究边界、作者表达、学习篇数、参考文献目标、图件策略和交付格式。
+- 支持由材料成稿、重写、科研诚信核查、独立审阅、按意见返修和适配新目标六类任务；项目配置记录目标场景、语言、研究边界、作者表达、学习篇数、参考文献目标和图件策略。
 - 将 PDF、DOCX、TXT、Markdown、TeX、BibTeX、CSV 和 JSON 作为参考资料或实验结果加入项目。
-- 并行检索 arXiv、OpenAlex、Crossref、Semantic Scholar、DBLP、ACM 元数据和可选 IEEE Xplore。
-- 支持综合主题、自然语言、标题、作者、DOI 和期刊/会议检索；作者条件可叠加机构、主题和会议。
+- 在研究材料阶段，从 arXiv、OpenAlex、Crossref、Semantic Scholar、DBLP 和 ACM 元数据等来源收集并去重候选论文。
 - 上传参考资料的项目和引导式项目在外发检索词前等待确认，并单独报告每个论文源的失败原因。
 - 对初稿和修订稿执行 9 类确定性质量检查：章节结构、证据、引用、方法要素、图设计、表设计、结果来源、研究者责任声明和正文完整度。
 - 默认逐步确认；运行中可中断并从断点继续，每个阶段完成后以及最终完成时都会自动保存项目版本。
-- 在同一项目保存可直接修改的贡献方案、证据文件、图表规划、阶段确认修改和版本时间线；影响下游的变化会将旧制品标为待更新，继续运行后再替换。
+- 在同一项目保存可直接查看的贡献方案、证据文件、图表规划、阶段确认修改和版本时间线；影响下游的变化会将旧制品标为待更新，继续运行后再替换。
 - 生成 Markdown、基于本地英文 IEEEtran 期刊模板的 LaTeX 可编辑稿、哈希清单和本地 ZIP；Markdown 可在项目页按纸张样式预览并打印为 PDF，也不会自动投稿或发布。
 
 ## 快速开始
@@ -145,44 +158,13 @@ scholaros delivery PROJECT_ID                      # 生成可编辑格式与本
 SCHOLAROS_CONDA_ENV=my-research-env ./scholaros.sh serve
 ```
 
-## 检索
-
-### 综合主题或自然语言
-
-```bash
-scholaros search "如何减少科研智能体产生的错误引用？" --natural-language
-```
-
-自然语言模式会显示原始问题、模型生成的英文检索词组和最终发送给论文源的检索式。模型不可用时会明确报错，不伪造翻译结果。
-
-### 作者组合条件
-
-```bash
-scholaros search "Wei Wang" --field author \
-  --affiliation "Shenzhen University" \
-  --topic "computer vision" \
-  --venue CVPR
-```
-
-作者、机构、主题和会议按 AND 组合。OpenAlex、Crossref/ACM 和 IEEE 会把可支持的条件下推到来源；Semantic Scholar 会在有限候选预算内分页核验。arXiv 与 DBLP 当前无法核验作者—机构对应关系时会明确跳过该条件。
-
-### 顶会和精确字段
-
-```bash
-scholaros search CVPR --field venue
-scholaros search "Attention Is All You Need" --field title
-scholaros search "10.1145/1234567" --field doi --source acm
-```
-
-每条结果尽可能提供论文网页、DOI 和开放 PDF 链接。ScholarOS 不抓取 Google Scholar，而是提供组合条件的手动补充检索链接；没有单一索引可以承诺覆盖 Google Scholar 的全部内容。
-
 ## Web 工作台
 
 ```bash
 scholaros serve
 ```
 
-浏览器打开 `http://127.0.0.1:8000`，API 文档位于 `/docs`。Web 工作台支持完整任务配置、上传资料、直接修改研究贡献方案、确认外发检索计划、分阶段保存并确认修改、逐条查看证据与图表规划、预览 Markdown/LaTeX 原文、查看质量问题、中断/断点继续、版本时间线、只读历史项目视图和项目删除。详见[项目工作台与交付](./docs/zh-CN/workbench.md)。
+浏览器打开 `http://127.0.0.1:8000`，API 文档位于 `/docs`。Web 工作台支持完整任务配置、上传资料、查看研究贡献方案、确认外发检索计划、分阶段保存并确认修改、逐条查看证据与图表规划、预览 Markdown/LaTeX 原文、查看质量问题、中断/断点继续、版本时间线、只读历史项目视图和项目删除。详见[项目工作台与交付](./docs/zh-CN/workbench.md)。
 
 ## 项目数据与输出
 

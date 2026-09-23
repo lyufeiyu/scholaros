@@ -32,7 +32,7 @@ scholaros run "你的研究问题" \
 
 ## 准备交付
 
-可在 Web 交付区、API 或命令行执行：
+可通过 API 或命令行执行：
 
 ```bash
 scholaros delivery PROJECT_ID

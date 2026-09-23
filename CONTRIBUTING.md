@@ -2,7 +2,7 @@
 
 **English** | [简体中文](./CONTRIBUTING.zh-CN.md)
 
-Thank you for improving ScholarOS. Keep the core small and explicit: the domain state machine, paper-source adapters, evidence ledger, and auditable Markdown outputs should retain clear boundaries.
+Thank you for improving ScholarOS. Prefer small, focused changes that keep the workflow understandable, preserve human review and researcher responsibility, and make failures, data boundaries, and compatibility impacts explicit.
 
 ## Development environment
 

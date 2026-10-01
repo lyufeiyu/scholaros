@@ -92,7 +92,15 @@ class DocumentIngestor:
         namespace = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
         paragraphs = []
         for paragraph in root.iter(f"{namespace}p"):
-            text = "".join(node.text or "" for node in paragraph.iter(f"{namespace}t"))
+            parts = []
+            for node in paragraph.iter():
+                if node.tag == f"{namespace}t":
+                    parts.append(node.text or "")
+                elif node.tag == f"{namespace}tab":
+                    parts.append("\t")
+                elif node.tag in {f"{namespace}br", f"{namespace}cr"}:
+                    parts.append("\n")
+            text = "".join(parts)
             if text.strip():
                 paragraphs.append(text)
         return "\n\n".join(paragraphs)

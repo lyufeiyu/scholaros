@@ -266,6 +266,19 @@ async def test_model_ignores_socks_proxy_env(settings, monkeypatch) -> None:
         model_timeout=2,
     )
 
+    original_client = httpx.AsyncClient
+
+    def fail_connection(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("测试连接失败", request=request)
+
+    def checked_client(*args, **kwargs):
+        # 明确验证代理配置，并模拟拒绝连接，避免依赖各系统的本地端口超时时序。
+        assert kwargs["trust_env"] is False
+        kwargs["transport"] = httpx.MockTransport(fail_connection)
+        return original_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", checked_client)
+
     with pytest.raises(RuntimeError, match="无法连接模型服务"):
         await OpenAICompatibleModel(configured).turn(
             [AgentMessage(role="user", content="回答")], []

@@ -183,7 +183,7 @@ def test_atomic_write_keeps_previous_artifact_on_replace_failure(flow, monkeypat
     monkeypatch.setattr(Path, "replace", fail)
     with pytest.raises(OSError):
         flow.store.save_artifact(project.id, "paper.md", "新文")
-    assert path.read_text() == "原文"
+    assert path.read_text(encoding="utf-8") == "原文"
     assert not list(path.parent.glob(".*.tmp"))
 
 
@@ -267,7 +267,7 @@ async def test_rejected_plan_snapshot_records_original_idea(flow):
     await flow.approve_and_run(project.id)
     updated = flow.reject_search_plan(project.id, revised_idea="这是人工重新修改后的研究问题")
     revision = flow.store.list_history(project.id)[0]["revision"]
-    manifest = json.loads(flow.store.history_artifact_path(project.id, revision, "manifest.json").read_text())
+    manifest = json.loads(flow.store.history_artifact_path(project.id, revision, "manifest.json").read_text(encoding="utf-8"))
     assert manifest["project"]["idea"] == project.idea
     assert updated.idea != project.idea
     assert updated.state["clear_generated_on_next_run"] is True

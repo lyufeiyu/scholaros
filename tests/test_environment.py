@@ -3,6 +3,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -57,6 +59,7 @@ def test_environment_documentation_explains_editable_install() -> None:
     assert "[dev]" in documentation
 
 
+@pytest.mark.skipif(os.name == "nt", reason="该测试验证 POSIX Shell 启动器，Windows 使用 scholaros 命令")
 def test_launcher_runs_custom_inactive_environment_interactively_from_project_dir(
     tmp_path: Path,
 ) -> None:
@@ -94,6 +97,7 @@ def test_launcher_runs_custom_inactive_environment_interactively_from_project_di
     assert "arg=<9000>" in calls[1]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="该测试验证 POSIX Shell 启动器，Windows 使用 scholaros 命令")
 def test_launcher_uses_current_python_when_requested_environment_is_active(
     tmp_path: Path,
 ) -> None:
@@ -131,6 +135,7 @@ def test_launcher_uses_current_python_when_requested_environment_is_active(
     assert "arg=<agent systems>" in calls[1]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="该测试验证 POSIX Shell 启动器，Windows 使用 scholaros 命令")
 def test_launcher_failure_only_reports_install_commands_without_running_them(
     tmp_path: Path,
 ) -> None:

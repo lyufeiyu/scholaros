@@ -68,6 +68,8 @@ In the current release, an “Agent” is a role with a distinct objective, prom
 
 Multi-Agent behavior is defined by role objectives, capability permissions, input/output contracts, and review relationships—not by process count.
 
+The six LLM prompt roles in `ResearchWriter` load only their relevant short skill rules from `scholaros/prompt_skills.py` into the system message. Project skills live in `skills/`; identical runtime copies are packaged under `scholaros/skills/` and checked by tests. Deterministic evidence synthesis and the offline fallback do not acquire new model or network dependencies.
+
 ## Trust design
 
 1. **Citation allowlist:** writing may only use stable citation keys from the evidence ledger.
@@ -85,7 +87,7 @@ Multi-Agent behavior is defined by role objectives, capability permissions, inpu
 
 ## From MVP to research platform
 
-Version 0.2 adds a stage-based project workbench, six task types, configurable learning and delivery targets, contribution/figure decisions, feedback-driven revision, Markdown/TeX export, and a verifiable local delivery package. Page-level full-text parsing, claim-level evidence, experiment execution, final media rendering, collaboration, and expert approval remain later work.
+Version 0.2 adds a stage-based project workbench, six task types, evidence-oriented research and delivery settings, contribution/figure decisions, feedback-driven revision, Markdown/TeX export, and a verifiable local delivery package. Page-level full-text parsing, claim-level evidence, experiment execution, final media rendering, collaboration, and expert approval remain later work.
 
 RL should not begin by training an LLM. After sufficient events, check outcomes, and user feedback exist, it could optimize workflow decisions such as when to search, what to read, which role to call, and when to request human confirmation.
 

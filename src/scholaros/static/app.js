@@ -248,8 +248,7 @@ function collectConfiguration(prefix = "") {
     research_mode: read("ResearchMode").value,
     requested_scope: read("RequestedScope").value,
     author_voice: read("AuthorVoice").value,
-    same_field_papers: Number(read("SameFieldPapers").value),
-    target_venue_papers: Number(read("TargetVenuePapers").value),
+    latex_template: read("LatexTemplate").value,
     reference_count_mode: referenceMode,
     reference_count: referenceMode === "custom" && countValue ? Number(countValue) : null,
     mechanism_figure: read("MechanismFigure").value,
@@ -580,7 +579,7 @@ function renderConfiguration(project, isActive) {
     ["目标", config.target_name || `${configurationLabels.scene[config.scene] || config.scene} · 暂未确定具体名称`],
     ["语言", configurationLabels.output_language[config.output_language] || config.output_language],
     ["研究边界", configurationLabels.research_mode[config.research_mode] || config.research_mode],
-    ["学习计划", `同方向 ${config.same_field_papers} 篇 · 目标场景 ${config.target_venue_papers} 篇`],
+    ["LaTeX 模板", config.latex_template === "ieee_journal" ? "IEEE 英文期刊" : "通用稿件"],
     ["交付", `${configurationLabels.requested_scope[config.requested_scope] || config.requested_scope} · ${(config.formats || []).join(" / ").toUpperCase()}`],
   ];
   for (const [label, value] of rows) {
@@ -596,8 +595,8 @@ function renderConfiguration(project, isActive) {
     WorkflowType: "workflow", SceneType: "scene", TargetName: "target_name",
     OutputLanguage: "output_language", ResearchMode: "research_mode",
     RequestedScope: "requested_scope", AuthorVoice: "author_voice",
-    MechanismFigure: "mechanism_figure", SameFieldPapers: "same_field_papers",
-    TargetVenuePapers: "target_venue_papers", ReferenceCountMode: "reference_count_mode",
+    MechanismFigure: "mechanism_figure", LatexTemplate: "latex_template",
+    ReferenceCountMode: "reference_count_mode",
     ReferenceCount: "reference_count",
   };
   for (const [field, key] of Object.entries(fieldMap)) {
@@ -756,8 +755,8 @@ function renderEvidenceSummary(project) {
     title.textContent = "学习计划";
     const summary = document.createElement("p");
     summary.textContent = learning.target_name
-      ? `同方向目标 ${learning.same_field_target} 篇，目标场景“${learning.target_name}”目标 ${learning.target_venue_target} 篇。`
-      : `同方向目标 ${learning.same_field_target} 篇；未指定目标期刊或会议。`;
+      ? `按研究问题检索候选文献；目标场景：${learning.target_name}。候选条目不等于全文已核验。`
+      : "按研究问题检索候选文献；候选条目不等于全文已核验。";
     plan.append(title, summary);
     if (learning.topic_queries?.length) {
       const queries = document.createElement("div");

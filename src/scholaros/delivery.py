@@ -38,7 +38,7 @@ def prepare_delivery(project: Project, store: ProjectStore) -> dict[str, Any]:
         store.save_artifact(
             project.id,
             "paper.tex",
-            markdown_to_tex(markdown),
+            markdown_to_tex(markdown, template=config["latex_template"]),
         )
 
     format_names = {"md": "paper.md", "docx": "paper.docx", "tex": "paper.tex", "pdf": "paper.pdf"}
@@ -59,6 +59,16 @@ def prepare_delivery(project: Project, store: ProjectStore) -> dict[str, Any]:
     ]
     if unresolved:
         blockers.append(f"仍有 {len(unresolved)} 条返修意见需要处理。")
+    tex_path = store.artifact_path(project.id, "paper.tex")
+    ieee_requested = config["latex_template"] == "ieee_journal"
+    ieee_generated = (
+        tex_path is not None
+        and "\\documentclass[journal]{IEEEtran}" in tex_path.read_text(encoding="utf-8").splitlines()[:2]
+    )
+    if ieee_requested and tex_path is not None and not ieee_generated:
+        blockers.append("稿件含非英文内容，无法应用所选 IEEE 期刊模板；请修订英文稿后重新生成。")
+    if ieee_requested:
+        warnings.append("IEEE 期刊稿仅提供排版骨架；作者信息、引文、图表及目标期刊规则需人工核验。")
     if config["requested_scope"] == "submission_package":
         warnings.append("作者、单位、伦理、基金和利益冲突元数据需在投稿前由研究者确认。")
 
@@ -81,7 +91,22 @@ def prepare_delivery(project: Project, store: ProjectStore) -> dict[str, Any]:
                 "role": _artifact_role(name),
             }
         )
-    template_files = _ieee_template_records() if "tex" in available_formats and not _contains_cjk(markdown) else []
+    template_files = (
+        _ieee_template_records()
+        if "tex" in available_formats and ieee_requested and ieee_generated
+        else []
+    )
+    if ieee_requested and ieee_generated:
+        if {item["name"] for item in template_files} != {"IEEEtran.cls", "IEEEtran.bst"}:
+            blockers.append("IEEE 模板资源不完整；交付包不可独立编译。")
+        tex_source = tex_path.read_text(encoding="utf-8")
+        cited = set(re.findall(r"\\cite\{([^}]+)\}", tex_source))
+        referenced = set(re.findall(r"\\bibitem\{([^}]+)\}", tex_source))
+        unresolved = sorted(cited - referenced)
+        if unresolved:
+            blockers.append(f"IEEE 稿有未匹配参考文献的引文键：{', '.join(unresolved)}。")
+        if any(key.startswith("UnverifiedRef") for key in referenced):
+            blockers.append("编号参考文献缺少可核验引用键；请为条目补充 [@cite_key]。")
     manifest = {
         "schema_version": 1,
         "project_id": project.id,
@@ -165,11 +190,11 @@ def markdown_to_docx(markdown: str) -> bytes:
     return output.getvalue()
 
 
-IEEE_TEMPLATE_ROOT = Path(__file__).resolve().parents[2] / "templates" / "ieee" / "IEEEtran"
+IEEE_TEMPLATE_ROOT = Path(__file__).resolve().parent / "templates" / "ieee"
 IEEE_JOURNAL_TEMPLATE = IEEE_TEMPLATE_ROOT / "bare_jrnl.tex"
 IEEE_TEMPLATE_FILES = (
     ("IEEEtran.cls", IEEE_TEMPLATE_ROOT / "IEEEtran.cls"),
-    ("IEEEtran.bst", IEEE_TEMPLATE_ROOT / "bibtex" / "IEEEtran.bst"),
+    ("IEEEtran.bst", IEEE_TEMPLATE_ROOT / "IEEEtran.bst"),
 )
 
 
@@ -214,73 +239,116 @@ def _ieee_package_lines() -> list[str]:
     return list(dict.fromkeys(lines))
 
 
-def markdown_to_tex(markdown: str) -> str:
-    """把 Markdown 草稿转为可编辑 LaTeX。
+def markdown_to_tex(markdown: str, *, template: str = "generic") -> str:
+    """把 Markdown 草稿转成通用或 IEEE 期刊 LaTeX；不虚构作者/参考文献信息。"""
 
-    含中文时使用 ctexart（XeLaTeX）以保证可编译；纯英文稿使用本地 IEEEtran 期刊模板。
-    """
-
-    title, body = _tex_body(markdown)
-    if _contains_cjk(markdown):
-        document_class = "\\documentclass{ctexart}"
-        packages = [
-            "\\usepackage{amsmath,amssymb}",
-            "\\usepackage{graphicx}",
-            "\\usepackage{booktabs}",
-            "\\usepackage{url}",
-            "\\usepackage[hidelinks]{hyperref}",
-        ]
-    else:
+    if template not in {"generic", "ieee_journal"}:
+        raise ValueError("未知 LaTeX 模板")
+    requested_ieee = template == "ieee_journal"
+    if requested_ieee and _contains_cjk(markdown):
+        template = "generic"
+    title, body, abstract, keywords, references = _tex_body(markdown)
+    if template == "ieee_journal":
         document_class = _ieee_document_class()
         packages = _ieee_package_lines()
         if not packages:
-            packages = [
-                "\\usepackage{amsmath,amssymb}",
-                "\\usepackage{graphicx}",
-                "\\usepackage{booktabs}",
-                "\\usepackage{url}",
-            ]
+            packages = ["\\usepackage{amsmath,amssymb}", "\\usepackage{graphicx}", "\\usepackage{url}"]
         if not any("hyperref" in line for line in packages):
             packages.append("\\usepackage[hidelinks]{hyperref}")
+    else:
+        document_class = "\\documentclass{ctexart}" if _contains_cjk(markdown) else "\\documentclass{article}"
+        packages = [
+            "\\usepackage{amsmath,amssymb}", "\\usepackage{graphicx}",
+            "\\usepackage{booktabs}", "\\usepackage{url}",
+            "\\usepackage[hidelinks]{hyperref}",
+        ]
+    preface = []
+    if abstract:
+        preface.extend(["\\begin{abstract}", *abstract, "\\end{abstract}"])
+    if keywords:
+        if template == "ieee_journal":
+            preface.extend(["\\begin{IEEEkeywords}", *keywords, "\\end{IEEEkeywords}"])
+        else:
+            preface.append("\\noindent\\textbf{Keywords:} " + " ".join(keywords) + "\\par")
+    if references:
+        body.extend(["\\begin{thebibliography}{" + str(len(references)) + "}",
+                     *[f"\\bibitem{{{key}}} {value}" for key, value in references],
+                     "\\end{thebibliography}"])
     return (
-        f"{document_class}\n"
+        ("% 所选 IEEE 模板未应用：稿件含非英文内容，请修订后重新生成。\n"
+         if requested_ieee and template == "generic" else "")
+        + f"{document_class}\n"
         + "\n".join(packages)
         + "\n"
         "\\title{" + title + "}\n"
-        "\\author{ScholarOS Research Workspace}\n"
+        "\\author{Author information to be confirmed}\n"
         "\\begin{document}\n"
         "\\maketitle\n"
-        + "\n".join(body)
+        + "\n".join(preface + body)
         + "\n\\end{document}\n"
     )
 
 
-def _tex_body(markdown: str) -> tuple[str, list[str]]:
-    """提取首个一级标题作为论文标题，并把其余 Markdown 转为 LaTeX 正文行。"""
+def _tex_body(markdown: str) -> tuple[str, list[str], list[str], list[str], list[tuple[str, str]]]:
+    """识别常见 Markdown 章节；IEEE 稿使用原生摘要、关键词和参考文献环境。"""
 
     body: list[str] = []
+    abstract: list[str] = []
+    keywords: list[str] = []
+    references: list[tuple[str, str]] = []
     title = "ScholarOS Research Manuscript"
+    section = "body"
     commands = {1: "section", 2: "subsection", 3: "subsubsection"}
-    first_heading = True
+    seen_heading = False
     for raw_line in markdown.splitlines():
         line = raw_line.rstrip()
         heading = re.match(r"^(#{1,6})\s+(.+)$", line)
         if heading:
-            if first_heading and len(heading.group(1)) == 1:
+            name = heading.group(2).strip().casefold()
+            if not seen_heading and len(heading.group(1)) == 1:
                 title = _tex_text(heading.group(2))
-                first_heading = False
+                seen_heading = True
                 continue
-            first_heading = False
-            level = min(3, len(heading.group(1)))
-            body.append(f"\\{commands[level]}{{{_tex_text(heading.group(2))}}}")
+            seen_heading = True
+            if name in {"abstract", "摘要"}:
+                section = "abstract"
+            elif name in {"keywords", "index terms", "关键词"}:
+                section = "keywords"
+            elif name in {"references", "bibliography", "参考文献"}:
+                section = "references"
+            else:
+                section = "body"
+                level = min(3, max(1, len(heading.group(1)) - 1))
+                body.append(f"\\{commands[level]}{{{_tex_text(heading.group(2))}}}")
+            continue
+        if not line.strip():
+            if section == "body":
+                body.append("")
+            continue
+        if section == "references":
+            entry = re.match(
+                r"^\s*(?:[-*]|\d+[.)])\s+\[@([A-Za-z0-9_.:-]+)\]\s*(.+)$", line
+            )
+            numbered = re.match(r"^\s*\d+[.)]\s+(.+)$", line)
+            if entry:
+                references.append((entry.group(1), _tex_text(entry.group(2))))
+            elif numbered:
+                # 保留无键条目，但不伪造与正文引文的对应关系。
+                references.append((f"UnverifiedRef{len(references) + 1}", _tex_text(numbered.group(1))))
+            elif line[:1].isspace() and references:
+                key, text = references[-1]
+                references[-1] = (key, text + " " + _tex_text(line.strip()))
+            else:
+                body.append("% 待人工核对的非结构化参考文献：" + _tex_text(line))
+        elif section == "abstract":
+            abstract.append(_tex_text(line))
+        elif section == "keywords":
+            keywords.append(_tex_text(line))
         elif line.startswith("- "):
             body.append(f"\\textbullet\\ {_tex_text(line[2:])}\\par")
-        elif line:
-            first_heading = False
-            body.append(f"{_tex_text(line)}\n")
         else:
-            body.append("")
-    return title, body
+            body.append(_tex_text(line))
+    return title, body, abstract, keywords, references
 
 
 def _contains_cjk(text: str) -> bool:

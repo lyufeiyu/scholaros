@@ -417,7 +417,10 @@ class ResearchWorkflow:
                 self.store.save_artifact(
                     project.id,
                     tex_name,
-                    markdown_to_tex(markdown_path.read_text(encoding="utf-8")),
+                    markdown_to_tex(
+                        markdown_path.read_text(encoding="utf-8"),
+                        template=configuration["latex_template"],
+                    ),
                 )
             spec_value = project.state.get("spec")
             if isinstance(spec_value, dict) and not project.state.get("contribution_blueprint"):
@@ -980,14 +983,7 @@ class ResearchWorkflow:
                         return
                     result = await self.search.search_many(
                         queries,
-                        limit=min(
-                            100,
-                            max(
-                                24,
-                                configuration["same_field_papers"]
-                                + configuration["target_venue_papers"],
-                            ),
-                        ),
+                        limit=24,
                         selected=project.selected_sources or self.search.workflow_sources(),
                     )
                     discover_papers = getattr(self.writer, "discover_papers", None)
@@ -1122,7 +1118,7 @@ class ResearchWorkflow:
                 self.store.save_artifact(
                     project.id,
                     "paper-draft.tex",
-                    markdown_to_tex(draft),
+                    markdown_to_tex(draft, template=configuration["latex_template"]),
                 )
 
             elif stage == Stage.REVIEWING:
@@ -1222,7 +1218,7 @@ class ResearchWorkflow:
                 self.store.save_artifact(
                     project.id,
                     "paper.tex",
-                    markdown_to_tex(revised),
+                    markdown_to_tex(revised, template=configuration["latex_template"]),
                 )
                 self.store.save_artifact(
                     project.id,

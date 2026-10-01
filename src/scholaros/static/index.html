@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="ScholarOS：面向研究者的证据追踪、方法设计与写作辅助工作台">
   <title>ScholarOS · Research Assistant Workspace</title>
-  <link rel="stylesheet" href="/static/styles.css?v=0.3.1">
+  <link rel="stylesheet" href="/static/styles.css?v=0.3.1-2">
 </head>
 <body>
   <div class="app-shell">
@@ -139,17 +139,21 @@
                     <option value="omit">不采用</option>
                   </select>
                 </label>
-                <label>同方向学习篇数<input id="sameFieldPapers" type="number" min="1" max="50" value="3"></label>
-                <label>目标场景学习篇数<input id="targetVenuePapers" type="number" min="1" max="50" value="3"></label>
+                <label>LaTeX 排版模板
+                  <select id="latexTemplate">
+                    <option value="generic">通用稿件（默认）</option>
+                    <option value="ieee_journal">IEEE 期刊（仅英文期刊）</option>
+                  </select>
+                </label>
                 <label>参考文献目标
                   <select id="referenceCountMode">
-                    <option value="venue_average">参考目标样本</option>
+                    <option value="venue_average">按实际证据（不设篇数）</option>
                     <option value="custom">自定义数量</option>
                   </select>
                 </label>
                 <label>自定义参考文献数量<input id="referenceCount" type="number" min="1" max="500" placeholder="选择自定义时填写" disabled></label>
               </div>
-              <div class="format-options" aria-label="交付格式"><span>交付格式</span><strong>Markdown + LaTeX</strong></div>
+              <div class="format-options" aria-label="交付格式"><span>交付格式</span><strong>Markdown + LaTeX</strong><small>IEEE 仅提供期刊排版骨架；请核对目标期刊要求、引文及作者信息。</small></div>
             </fieldset>
             </div>
             <div class="source-picker">
@@ -291,9 +295,8 @@
                   <label>交付范围<select id="projectRequestedScope"><option value="manuscript">论文稿件</option><option value="local_delivery">完整本地稿包</option><option value="submission_package">投稿材料包</option></select></label>
                   <label>作者表达<select id="projectAuthorVoice"><option value="off">不特别保留</option><option value="standard">适度保留</option><option value="strict">严格保留</option></select></label>
                   <label>机制 / 架构图<select id="projectMechanismFigure"><option value="prefer">优先考虑</option><option value="auto">由系统判断</option><option value="omit">不采用</option></select></label>
-                  <label>同方向篇数<input id="projectSameFieldPapers" type="number" min="1" max="50"></label>
-                  <label>目标场景篇数<input id="projectTargetVenuePapers" type="number" min="1" max="50"></label>
-                  <label>参考文献目标<select id="projectReferenceCountMode"><option value="venue_average">参考目标样本</option><option value="custom">自定义数量</option></select></label>
+                  <label>LaTeX 排版模板<select id="projectLatexTemplate"><option value="generic">通用稿件</option><option value="ieee_journal">IEEE 期刊（仅英文期刊）</option></select></label>
+                  <label>参考文献目标<select id="projectReferenceCountMode"><option value="venue_average">按实际证据（不设篇数）</option><option value="custom">自定义数量</option></select></label>
                   <label>自定义数量<input id="projectReferenceCount" type="number" min="1" max="500"></label>
                 </div>
                 <div class="format-options"><span>格式</span><strong>Markdown + LaTeX（固定保留）</strong></div>
@@ -352,6 +355,6 @@
 
   <div id="toast" class="toast" role="alert" aria-live="assertive"></div>
   <script src="https://cdn.jsdelivr.net/npm/mermaid@11.12.1/dist/mermaid.min.js" defer></script>
-  <script src="/static/app.js?v=0.3.1" defer></script>
+  <script src="/static/app.js?v=0.3.1-2" defer></script>
 </body>
 </html>

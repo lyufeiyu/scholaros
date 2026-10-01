@@ -68,6 +68,8 @@ stateDiagram-v2
 
 是否是多 Agent 不由进程数量决定，而由角色目标、能力权限、输入输出契约和审查关系决定。
 
+`ResearchWriter` 的六个模型 prompt 角色通过 `scholaros/prompt_skills.py` 只把相关技能的短规则加入 system 消息。项目技能源位于 `skills/`，相同的运行时副本随 `scholaros/skills/` 打包并由测试核对一致性。确定性证据整理与离线降级不因此增加模型或联网依赖。
+
 ## 可信度设计
 
 1. **引用白名单：** 写作只能使用证据账本中的稳定引用键。

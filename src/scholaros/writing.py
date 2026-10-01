@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
 from scholaros.domain import Evidence, Paper, ResearchSpec
+from scholaros.prompt_skills import skill_instructions
 from scholaros.runtime import AgentLoop, TurnModel
 
 EventSink = Callable[[str, dict[str, Any]], None | Awaitable[None]]
@@ -411,7 +412,10 @@ hypotheses、independent_variables、dependent_variables、baselines 必须是�
         loop = AgentLoop(self.model, event_sink=self.event_sink, max_turns=3)
         return await loop.run(
             prompt,
-            system=f"你是 {role}。遵守科研诚信，区分证据、推断和待验证假设。",
+            system=(
+                f"你是 {role}。遵守科研诚信，区分证据、推断和待验证假设。\n"
+                + skill_instructions(role)
+            ),
         )
 
     @staticmethod

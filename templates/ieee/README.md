@@ -8,3 +8,5 @@
 - 模板许可证与使用边界以归档内的 `README`、`changelog.txt` 和上游许可说明为准。
 
 该模板只负责排版骨架，不代表稿件已经符合某个具体 IEEE 期刊的投稿要求；投稿前仍需按目标期刊最新 Author Center 指南核对文档类选项、匿名要求、参考文献和图表规范。
+
+ScholarOS wheel 中仅内置 `IEEEtran.cls`、`IEEEtran.bst` 和 `bare_jrnl.tex` 的副本用于排版与交付；模板目录保留上游完整归档以便追溯。IEEE 模板需在项目配置中显式选择，仅适用于英文期刊论文。

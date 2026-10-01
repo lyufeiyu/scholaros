@@ -38,7 +38,7 @@ where = ["src"]
 include = ["scholaros*"]
 
 [tool.setuptools.package-data]
-scholaros = ["static/*.html", "static/*.css", "static/*.js"]
+scholaros = ["static/*.html", "static/*.css", "static/*.js", "templates/ieee/*.cls", "templates/ieee/*.bst", "templates/ieee/*.tex", "skills/*/SKILL.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -18,7 +18,6 @@ CLI example:
 scholaros run "Your research question" \
   --workflow transfer --scene conference --target-name DemoConf \
   --language en --research-mode materials_only \
-  --same-field-papers 5 --target-venue-papers 5 \
   --reference-count 30 --format md --format tex
 ```
 
@@ -28,7 +27,7 @@ Each stage accepts a pending edit. Saving the edit does not alter current result
 
 ## Review and revise in the same project
 
-The draft stage exposes both Markdown and LaTeX source; the LaTeX export uses the repository's local IEEEtran journal template, with the target journal's latest author instructions still taking precedence. The quality stage lists every finding with severity, the detected problem, and the recommended change. Revision uses the same confirmed stage-edit mechanism instead of a second feedback form. The last stage combines delivery with a project/material overview so scope, files, evidence, figure/table plans, manuscript, and review status can be checked together.
+The draft stage exposes both Markdown and LaTeX source; generic LaTeX is the default; choosing the English IEEE journal option uses the bundled IEEEtran template, with the target journal's latest author instructions still taking precedence. The quality stage lists every finding with severity, the detected problem, and the recommended change. Revision uses the same confirmed stage-edit mechanism instead of a second feedback form. The last stage combines delivery with a project/material overview so scope, files, evidence, figure/table plans, manuscript, and review status can be checked together.
 
 ## Prepare delivery
 

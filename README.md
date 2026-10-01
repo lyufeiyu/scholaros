@@ -25,6 +25,16 @@ The terminal CLI and Web workspace share the same workflow. ScholarOS produces c
 
 ## 📢 News
 
+<details open>
+<summary>October 1, 2026 · Unreleased — IEEE export, workspace options, and research skills</summary>
+
+- Added explicit generic/IEEE journal LaTeX selection; IEEE exports now use native abstract, keywords, and bibliography structures, with unresolved citations blocking delivery readiness.
+- Removed paper-learning count options from the Web workspace and clarified the default reference target as evidence-driven.
+- Bundled IEEE template files in the wheel.
+- Added six research skills with clearer task-specific descriptions for scoping, literature discovery, evidence, methods, writing, and manuscript checks. All six model prompt roles now load only their relevant short skill rules; the skills are packaged in the wheel, while offline mode remains unchanged.
+
+</details>
+
 <details>
 <summary>September 23, 2026 · v0.3.1 — Consistency fixes and multilingual support</summary>
 
@@ -77,7 +87,7 @@ ScholarOS is a research assistance tool, not an autonomous paper author, and mus
 - Runs nine deterministic checks on both the initial and revised draft: section structure, evidence availability, in-text citations, method elements, figure design, table design, result provenance, researcher-responsibility statement, and draft depth.
 - Uses stage-by-stage checkpoints by default, supports explicit interruption and resume, and automatically saves a version after every completed stage and after final completion.
 - Keeps one reviewable contribution blueprint, detailed evidence files, figure/table plans, stage-confirmed revisions, and a read-only version timeline in the same project; affected downstream artifacts remain stale until regenerated.
-- Prepares editable Markdown and English IEEEtran LaTeX outputs plus a hash manifest and local ZIP. Markdown can be previewed as a paper and printed to PDF from the project page; local delivery never means automatic submission.
+- Prepares editable Markdown and generic or explicitly selected IEEE journal LaTeX outputs plus a hash manifest and local ZIP. Markdown can be previewed as a paper and printed to PDF from the project page; local delivery never means automatic submission.
 
 ## Quick start
 
@@ -247,3 +257,7 @@ See [Paper-source permissions and compliance](./docs/permissions.md) for details
 ## License
 
 [MIT](./LICENSE)
+
+### Pre-submission evidence skill
+
+Six [stage-specific research skills](./skills/README.md) guide the relevant model prompts; Codex can read the full skills when needed. No skill automatically shares local source material or authorizes submission.

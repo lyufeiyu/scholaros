@@ -57,6 +57,7 @@ class ProjectConfiguration(BaseModel):
     reference_count_mode: Literal["venue_average", "custom"] = "venue_average"
     reference_count: int | None = Field(default=None, ge=1, le=500)
     mechanism_figure: Literal["prefer", "auto", "omit"] = "prefer"
+    latex_template: Literal["generic", "ieee_journal"] = "generic"
     formats: list[Literal["md", "tex"]] = Field(
         default_factory=lambda: ["md", "tex"], min_length=1
     )

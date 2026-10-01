@@ -18,7 +18,6 @@ ScholarOS 按阶段呈现当前项目工作区，同时保留可恢复的七阶�
 scholaros run "你的研究问题" \
   --workflow transfer --scene conference --target-name DemoConf \
   --language zh --research-mode materials_only \
-  --same-field-papers 5 --target-venue-papers 5 \
   --reference-count 30 --format md --format tex
 ```
 
@@ -28,7 +27,7 @@ scholaros run "你的研究问题" \
 
 ## 在同一项目检查与修订
 
-稿件阶段同时显示 Markdown 与 LaTeX 原文本；LaTeX 导出使用仓库本地保存的 IEEEtran 期刊模板，但投稿时仍应以目标期刊最新作者指南为准。方法与图表阶段会把流程图以 Mermaid 预览、把表格规划以可读表格呈现；加载或解析失败时仍保留文字说明。质量阶段逐项显示严重程度、检查出的问题和建议修改点。修订统一使用阶段顶部的“保存修改草稿—确认并更新后续”机制，不再额外设置一套“意见与同任务返修”表单。最后阶段将交付与项目材料总览并排呈现，统一核对范围、材料、证据、图表、稿件和质量状态。
+稿件阶段同时显示 Markdown 与 LaTeX 原文本；LaTeX 默认采用通用模板；明确选择英文 IEEE 期刊时才使用内置 IEEEtran，并以目标期刊最新作者指南为准。方法与图表阶段会把流程图以 Mermaid 预览、把表格规划以可读表格呈现；加载或解析失败时仍保留文字说明。质量阶段逐项显示严重程度、检查出的问题和建议修改点。修订统一使用阶段顶部的“保存修改草稿—确认并更新后续”机制，不再额外设置一套“意见与同任务返修”表单。最后阶段将交付与项目材料总览并排呈现，统一核对范围、材料、证据、图表、稿件和质量状态。
 
 ## 准备交付
 

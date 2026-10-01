@@ -18,6 +18,7 @@ from scholaros.workflow import ResearchWorkflow
 from scholaros.workspace import (
     AUTHOR_VOICE_MODES,
     DELIVERY_FORMATS,
+    LATEX_TEMPLATES,
     MECHANISM_FIGURE_MODES,
     OUTPUT_LANGUAGES,
     REQUESTED_SCOPES,
@@ -70,14 +71,15 @@ def _add_configuration_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--research-mode", choices=sorted(RESEARCH_MODES))
     parser.add_argument("--delivery-scope", dest="requested_scope", choices=sorted(REQUESTED_SCOPES))
     parser.add_argument("--author-voice", choices=sorted(AUTHOR_VOICE_MODES))
-    parser.add_argument("--same-field-papers", type=_bounded_int("同方向论文数", 1, 50))
-    parser.add_argument("--target-venue-papers", type=_bounded_int("目标场景论文数", 1, 50))
+    parser.add_argument("--same-field-papers", type=_bounded_int("同方向论文数", 1, 50), help=argparse.SUPPRESS)
+    parser.add_argument("--target-venue-papers", type=_bounded_int("目标场景论文数", 1, 50), help=argparse.SUPPRESS)
     parser.add_argument(
         "--reference-count",
         type=_bounded_int("参考文献数量", 1, 500),
         help="自定义参考文献目标数量；提供后自动启用 custom 模式",
     )
     parser.add_argument("--mechanism-figure", choices=sorted(MECHANISM_FIGURE_MODES))
+    parser.add_argument("--latex-template", choices=sorted(LATEX_TEMPLATES))
     parser.add_argument(
         "--format",
         action="append",
@@ -99,6 +101,7 @@ def _configuration_from_args(args: argparse.Namespace) -> dict[str, object]:
         "same_field_papers",
         "target_venue_papers",
         "mechanism_figure",
+        "latex_template",
         "formats",
     )
     configuration = {

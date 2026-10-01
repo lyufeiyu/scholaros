@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import zipfile
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -30,7 +29,10 @@ def test_configuration_is_complete_and_strict() -> None:
     config = normalize_configuration({"workflow": "transfer", "formats": ["tex", "md", "md"]})
     assert config["workflow"] == "transfer"
     assert config["formats"] == ["md", "tex"]
-    assert config["same_field_papers"] == 3
+    assert config["latex_template"] == "generic"
+    with pytest.raises(ValueError, match="仅适用于英文期刊"):
+        normalize_configuration({"latex_template": "ieee_journal"})
+    assert normalize_configuration({"output_language": "en", "scene": "journal", "latex_template": "ieee_journal"})["latex_template"] == "ieee_journal"
     with pytest.raises(ValueError, match="未知项目配置"):
         normalize_configuration({"workflow": "review", "secret_mode": True})
     with pytest.raises(ValueError, match="reference_count"):
@@ -53,10 +55,87 @@ def test_docx_and_tex_exports_are_editable_and_ingestible(tmp_path) -> None:
     assert "\\cite{Source1}" in chinese_tex
     assert "研究标题" in chinese_tex
 
-    english_tex = markdown_to_tex("# Research Title\n\nBody cites [@Source1] with **emphasis**.")
+    english_tex = markdown_to_tex("# Research Title\n\nBody cites [@Source1] with **emphasis**.", template="ieee_journal")
     assert "\\documentclass[journal]{IEEEtran}" in english_tex
     assert "\\cite{Source1}" in english_tex
-    assert (Path(__file__).parents[1] / "templates" / "ieee" / "IEEEtran" / "IEEEtran.cls").exists()
+    from scholaros.delivery import IEEE_TEMPLATE_ROOT
+
+    assert (IEEE_TEMPLATE_ROOT / "IEEEtran.cls").exists()
+
+
+def test_ieee_tex_uses_native_abstract_keywords_and_bibitems() -> None:
+    source = (
+        "# Research Title\n\n## Abstract\nA cautious abstract.\n\n"
+        "## Keywords\nresearch, verification\n\n## Introduction\n"
+        "Evidence [@Source1] supports this.\n\n## References\n"
+        "- [@Source1] A. Author. *Verified title*. Journal, 2024.\n"
+    )
+    tex = markdown_to_tex(source, template="ieee_journal")
+    assert "\\begin{abstract}\nA cautious abstract.\n\\end{abstract}" in tex
+    assert "\\begin{IEEEkeywords}\nresearch, verification\n\\end{IEEEkeywords}" in tex
+    assert "\\section{Introduction}" in tex
+    assert "\\cite{Source1}" in tex
+    assert "\\bibitem{Source1}" in tex
+    assert tex.count("\\cite{Source1}") == 1
+    assert "\\section{References}" not in tex
+    assert tex.index("\\end{abstract}") < tex.index("\\section{Introduction}")
+    assert "\\documentclass{article}" in markdown_to_tex(source)
+    fallback = markdown_to_tex("# English\n\n## Abstract\n包含中文", template="ieee_journal")
+    assert "\\documentclass{ctexart}" in fallback
+    assert "所选 IEEE 模板未应用" in fallback
+
+
+
+async def test_ieee_request_with_chinese_draft_is_not_marked_ready(settings) -> None:
+    from scholaros.delivery import prepare_delivery
+
+    flow = offline_flow(settings)
+    project = flow.create_project(
+        "Test a reproducible evidence-synthesis workflow.",
+        configuration={"output_language": "en", "latex_template": "ieee_journal"},
+    )
+    completed = await flow.run(project.id)
+    tex = flow.store.artifact_path(project.id, "paper.tex")
+    assert tex is not None and "\\documentclass{ctexart}" in tex.read_text(encoding="utf-8")
+    manifest = prepare_delivery(completed, flow.store)
+    assert not manifest["ready"]
+    assert any("无法应用所选 IEEE" in issue for issue in manifest["blockers"])
+    assert manifest["template_files"] == []
+
+
+
+def test_ieee_numbered_references_are_preserved_but_not_misassigned(settings) -> None:
+    from scholaros.delivery import prepare_delivery
+
+    flow = offline_flow(settings)
+    project = flow.create_project("Check numbered references in an English IEEE journal draft.", configuration={"output_language": "en", "latex_template": "ieee_journal"})
+    flow.store.save_artifact(
+        project.id,
+        "paper.md",
+        "# Title\n\n## Introduction\nClaim [@X].\n\n## References\n"
+        "1. A. Author. Journal, 2024.\n   Continued venue details.\n",
+    )
+    manifest = prepare_delivery(project, flow.store)
+    tex = flow.store.artifact_path(project.id, "paper.tex").read_text(encoding="utf-8")
+    assert "\\bibitem{UnverifiedRef1} A. Author. Journal, 2024. Continued venue details." in tex
+    assert not manifest["ready"]
+    assert any("未匹配" in issue for issue in manifest["blockers"])
+    assert any("缺少可核验引用键" in issue for issue in manifest["blockers"])
+    keyed = markdown_to_tex("# Title\n\n## References\n1. [@X] A. Author. Journal, 2024.", template="ieee_journal")
+    assert "\\bibitem{X}" in keyed
+
+
+def test_ieee_delivery_blocks_missing_class_file(settings, monkeypatch, tmp_path) -> None:
+    import scholaros.delivery as delivery
+
+    flow = offline_flow(settings)
+    project = flow.create_project("Check missing IEEE class in delivery.", configuration={"output_language": "en", "latex_template": "ieee_journal"})
+    flow.store.save_artifact(project.id, "paper.md", "# Title\n\n## Abstract\nSummary.\n")
+    monkeypatch.setattr(delivery, "IEEE_TEMPLATE_FILES", (("IEEEtran.cls", tmp_path / "missing.cls"),))
+    manifest = delivery.prepare_delivery(project, flow.store)
+    assert not manifest["ready"]
+    assert any("模板资源不完整" in issue for issue in manifest["blockers"])
+
 
 
 async def test_guided_scoping_exposes_one_contribution_blueprint(settings) -> None:
@@ -335,6 +414,7 @@ def test_english_delivery_packages_ieee_template(settings) -> None:
 
     flow = offline_flow(settings)
     project = Project(id="ab12ab12ab12", idea="English delivery package")
+    project.state["configuration"] = {"output_language": "en", "latex_template": "ieee_journal"}
     flow.store.save_artifact(project.id, "paper.md", "# English Title\n\nBody cites [@A].\n")
 
     manifest = prepare_delivery(project, flow.store)

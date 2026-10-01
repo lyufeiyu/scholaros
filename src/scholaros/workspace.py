@@ -15,6 +15,7 @@ RESEARCH_MODES = frozenset({"agent_decide", "required", "materials_only"})
 REQUESTED_SCOPES = frozenset({"manuscript", "local_delivery", "submission_package"})
 AUTHOR_VOICE_MODES = frozenset({"off", "standard", "strict"})
 REFERENCE_COUNT_MODES = frozenset({"venue_average", "custom"})
+LATEX_TEMPLATES = frozenset({"generic", "ieee_journal"})
 MECHANISM_FIGURE_MODES = frozenset({"prefer", "auto", "omit"})
 DELIVERY_FORMATS = frozenset({"md", "tex"})
 LEGACY_DELIVERY_FORMATS = frozenset({"docx", "pdf"})
@@ -34,17 +35,18 @@ DEFAULT_CONFIGURATION: dict[str, Any] = {
     "reference_count_mode": "venue_average",
     "reference_count": None,
     "mechanism_figure": "prefer",
+    "latex_template": "generic",
     "formats": ["md", "tex"],
 }
 
 SCOPING_CONFIGURATION_FIELDS = frozenset(
     {"workflow", "scene", "target_name", "research_mode"}
 )
-SEARCH_CONFIGURATION_FIELDS = frozenset(
-    {"same_field_papers", "target_venue_papers", "reference_count_mode", "reference_count"}
-)
+SEARCH_CONFIGURATION_FIELDS = frozenset({"same_field_papers", "target_venue_papers"})
 DESIGN_CONFIGURATION_FIELDS = frozenset({"mechanism_figure"})
-DRAFT_CONFIGURATION_FIELDS = frozenset({"output_language", "author_voice", "formats"})
+DRAFT_CONFIGURATION_FIELDS = frozenset(
+    {"output_language", "author_voice", "formats", "latex_template", "reference_count_mode", "reference_count"}
+)
 
 
 def normalize_configuration(value: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -65,6 +67,11 @@ def normalize_configuration(value: Mapping[str, Any] | None = None) -> dict[str,
     _choice(config, "author_voice", AUTHOR_VOICE_MODES)
     _choice(config, "reference_count_mode", REFERENCE_COUNT_MODES)
     _choice(config, "mechanism_figure", MECHANISM_FIGURE_MODES)
+    _choice(config, "latex_template", LATEX_TEMPLATES)
+    if config["latex_template"] == "ieee_journal" and (
+        config["output_language"] != "en" or config["scene"] != "journal"
+    ):
+        raise ValueError("IEEE 期刊模板仅适用于英文期刊论文")
 
     target_name = str(config.get("target_name") or "").strip()
     if len(target_name) > 200:
@@ -113,7 +120,7 @@ def configuration_summary(config: Mapping[str, Any]) -> dict[str, Any]:
         "target": value["target_name"] or "venue-neutral",
         "language": value["output_language"],
         "research_boundary": value["research_mode"],
-        "learning_set": value["same_field_papers"] + value["target_venue_papers"],
+        "latex_template": value["latex_template"],
         "formats": value["formats"],
     }
 
@@ -123,8 +130,6 @@ def build_learning_plan(config: Mapping[str, Any], spec: ResearchSpec) -> dict[s
     target = value["target_name"]
     if value["research_mode"] == "materials_only":
         return {
-            "same_field_target": 0,
-            "target_venue_target": 0,
             "target_name": target or None,
             "reference_count_mode": value["reference_count_mode"],
             "reference_count": value["reference_count"],
@@ -136,8 +141,6 @@ def build_learning_plan(config: Mapping[str, Any], spec: ResearchSpec) -> dict[s
             ],
         }
     return {
-        "same_field_target": value["same_field_papers"],
-        "target_venue_target": value["target_venue_papers"] if target else 0,
         "target_name": target or None,
         "reference_count_mode": value["reference_count_mode"],
         "reference_count": value["reference_count"],

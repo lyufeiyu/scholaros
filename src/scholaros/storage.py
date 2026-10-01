@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import fcntl
+import errno
 import hashlib
 import json
 import logging
+import os
 import re
 import shutil
 import sqlite3
@@ -17,6 +18,11 @@ from uuid import uuid4
 
 from scholaros.config import Settings
 from scholaros.domain import Event, Project, utc_now
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 
 logger = logging.getLogger(__name__)
 
@@ -131,21 +137,37 @@ class ProjectStore:
 
     @contextmanager
     def project_lock(self, project_id: str) -> Iterator[None]:
-        """用 POSIX 文件锁阻止同一项目被跨进程同时运行或删除。"""
+        """用系统文件锁阻止同一项目在 Windows 或 Unix 上被跨进程同时使用。"""
         self._validate_project_id(project_id)
         lock_directory = self.settings.home / "locks"
         lock_directory.mkdir(parents=True, exist_ok=True)
         lock_path = lock_directory / f"{project_id}.lock"
-        handle = lock_path.open("a+", encoding="utf-8")
+        handle = lock_path.open("a+b")
+        acquired = False
         try:
             try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as exc:
+                if os.name == "nt":
+                    # Windows 锁定从当前位置开始的字节；空文件也能锁定首字节。
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                if exc.errno not in {errno.EACCES, errno.EAGAIN}:
+                    raise
                 raise ProjectBusyError("项目正在另一个 ScholarOS 进程中运行") from exc
+            acquired = True
             yield
         finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-            handle.close()
+            try:
+                if acquired:
+                    if os.name == "nt":
+                        handle.seek(0)
+                        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                    else:
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            finally:
+                handle.close()
 
     def _delete_project_locked(self, project_id: str) -> bool:
         directory = self.settings.artifacts_path / project_id

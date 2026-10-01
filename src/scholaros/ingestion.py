@@ -48,7 +48,7 @@ class DocumentIngestor:
             text = self._read_docx(path)
             page_count = None
         else:
-            text = raw.decode("utf-8", errors="replace")
+            text = raw.decode("utf-8-sig", errors="replace")
             page_count = None
         text = text.strip()
         if not text:

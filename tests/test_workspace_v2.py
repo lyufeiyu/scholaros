@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import zipfile
 
 import pytest
@@ -80,13 +81,16 @@ def test_ieee_tex_uses_native_abstract_keywords_and_bibitems() -> None:
     assert "\\section{References}" not in tex
     assert tex.index("\\end{abstract}") < tex.index("\\section{Introduction}")
     assert "\\documentclass{article}" in markdown_to_tex(source)
-    fallback = markdown_to_tex("# English\n\n## Abstract\n包含中文", template="ieee_journal")
-    assert "\\documentclass{ctexart}" in fallback
-    assert "所选 IEEE 模板未应用" in fallback
+    with pytest.raises(ValueError, match="IEEE 期刊稿仍含中文"):
+        markdown_to_tex("# English\n\n## Abstract\n包含中文", template="ieee_journal")
+    numbered = markdown_to_tex("# Title\n\n## 1. Introduction\nText.\n\n## 2. Conclusion\nEnd.", template="ieee_journal")
+    assert "\\section{Introduction}" in numbered
+    assert "\\section{Conclusion}" in numbered
+    assert "\\section{1. Introduction}" not in numbered
 
 
 
-async def test_ieee_request_with_chinese_draft_is_not_marked_ready(settings) -> None:
+async def test_ieee_request_generates_english_draft_and_ieee_tex(settings) -> None:
     from scholaros.delivery import prepare_delivery
 
     flow = offline_flow(settings)
@@ -94,14 +98,85 @@ async def test_ieee_request_with_chinese_draft_is_not_marked_ready(settings) -> 
         "Test a reproducible evidence-synthesis workflow.",
         configuration={"output_language": "en", "latex_template": "ieee_journal"},
     )
+    async def english_draft(*args, **kwargs):
+        return (
+            "# A Specific Evidence-Synthesis Protocol\n\n"
+            "## Abstract\nA study protocol for verifiable synthesis.\n\n"
+            "## Keywords\nevidence, reproducibility\n\n"
+            "## Introduction\nWe examine traceable evidence synthesis.\n\n"
+            "## Related Work\nBibliographic claims require original-source review.\n\n"
+            "## Methods\nWe define inclusion criteria and source checks.\n\n"
+            "## Experimental Design\nCompare protocols using predefined criteria.\n\n"
+            "## Analysis Plan\nReport deviations and uncertainty.\n\n"
+            "## Results Reporting Protocol\nNo results are asserted before data collection.\n\n"
+            "## Discussion and Limitations\nCoverage and selection bias remain.\n\n"
+            "## Conclusion\nThe protocol awaits empirical validation.\n\n"
+            "## References\n- [@Protocol1] A. Author. *A verified protocol*. Journal, 2024.\n"
+        )
+
+    flow.writer.draft = english_draft
     completed = await flow.run(project.id)
     tex = flow.store.artifact_path(project.id, "paper.tex")
-    assert tex is not None and "\\documentclass{ctexart}" in tex.read_text(encoding="utf-8")
+    assert tex is not None
+    content = tex.read_text(encoding="utf-8")
+    assert content.startswith("\\documentclass[journal]{IEEEtran}")
+    assert "\\begin{abstract}" in content
+    assert "\\begin{IEEEkeywords}" in content
+    assert "\\section{Introduction}" in content
+    assert "\\section{Conclusion}" in content
+    assert "\\begin{thebibliography}" in content
+    assert not re.search(r"[\u3400-\u9fff]", content)
+    manuscript = flow.store.artifact_path(project.id, "paper.md").read_text(encoding="utf-8")
+    assert "## Introduction" in manuscript
+    assert "traceable evidence synthesis" in manuscript
+    assert "No results are asserted before data collection" in manuscript
+    assert "\\bibitem{Protocol1}" in content
     manifest = prepare_delivery(completed, flow.store)
-    assert not manifest["ready"]
-    assert any("无法应用所选 IEEE" in issue for issue in manifest["blockers"])
-    assert manifest["template_files"] == []
+    assert {item["name"] for item in manifest["template_files"]} == {"IEEEtran.cls", "IEEEtran.bst"}
+    assert not any("缺少必要结构" in issue for issue in manifest["blockers"])
+    assert not any("章节顺序" in issue for issue in manifest["blockers"])
 
+
+
+async def test_offline_ieee_draft_requires_real_english_writer(settings) -> None:
+    flow = offline_flow(settings)
+    project = flow.create_project(
+        "验证无法离线翻译的论文不会生成空泛英文稿",
+        configuration={"output_language": "en", "latex_template": "ieee_journal"},
+    )
+    with pytest.raises(ValueError, match="需要可用写作模型"):
+        await flow.run(project.id)
+    assert flow.store.artifact_path(project.id, "paper-draft.tex") is None
+
+
+def test_legacy_chinese_ieee_preview_remains_readable(settings) -> None:
+    flow = offline_flow(settings)
+    project = flow.create_project(
+        "Test legacy preview handling.",
+        configuration={"output_language": "en", "latex_template": "ieee_journal"},
+    )
+    flow.store.save_artifact(project.id, "paper.md", "# 标题\n\n## 摘要\n中文摘要")
+    flow.ensure_preview_artifacts(project.id)
+    assert flow.store.artifact_path(project.id, "paper.tex") is None
+    assert flow.store.artifact_path(project.id, "paper.md") is not None
+
+
+def test_ieee_delivery_never_packages_a_generic_fallback_for_chinese(settings) -> None:
+    from scholaros.delivery import prepare_delivery
+
+    flow = offline_flow(settings)
+    project = flow.create_project(
+        "A test of explicit English manuscript requirements.",
+        configuration={"output_language": "en", "latex_template": "ieee_journal"},
+    )
+    flow.store.save_artifact(project.id, "paper.md", "# 标题\n\n## 摘要\n中文摘要。")
+    flow.store.save_artifact(project.id, "paper.tex", "\\documentclass{article}\n")
+    manifest = prepare_delivery(project, flow.store)
+    assert flow.store.artifact_path(project.id, "paper.tex") is None
+    assert "tex" in manifest["missing_formats"]
+    assert "paper.tex" not in {item["name"] for item in manifest["files"]}
+    assert any("不能暗中改用通用模板" in issue for issue in manifest["blockers"])
+    assert manifest["template_files"] == []
 
 
 def test_ieee_numbered_references_are_preserved_but_not_misassigned(settings) -> None:
@@ -123,6 +198,25 @@ def test_ieee_numbered_references_are_preserved_but_not_misassigned(settings) ->
     assert any("缺少可核验引用键" in issue for issue in manifest["blockers"])
     keyed = markdown_to_tex("# Title\n\n## References\n1. [@X] A. Author. Journal, 2024.", template="ieee_journal")
     assert "\\bibitem{X}" in keyed
+
+
+def test_ieee_delivery_blocks_missing_or_disordered_sections(settings) -> None:
+    from scholaros.delivery import prepare_delivery
+
+    flow = offline_flow(settings)
+    project = flow.create_project(
+        "An incomplete IEEE manuscript.",
+        configuration={"output_language": "en", "latex_template": "ieee_journal"},
+    )
+    flow.store.save_artifact(
+        project.id, "paper.md",
+        "# Title\n\n## Abstract\nSummary.\n\n## Keywords\nprotocol\n\n"
+        "## Conclusion\nEnd.\n\n## Introduction\nStart.\n\n"
+        "## References\n- [@X] A. Author. *Title*. Journal, 2024.",
+    )
+    manifest = prepare_delivery(project, flow.store)
+    assert any("缺少必要结构" in issue for issue in manifest["blockers"])
+    assert any("章节顺序" in issue for issue in manifest["blockers"])
 
 
 def test_ieee_delivery_blocks_missing_class_file(settings, monkeypatch, tmp_path) -> None:
@@ -797,3 +891,27 @@ def test_learning_and_figure_artifacts_are_json(settings) -> None:
     ):
         value = json.loads(flow.store.artifact_path(project.id, name).read_text(encoding="utf-8"))
         assert value
+
+
+async def test_stage_snapshot_failure_can_resume_without_repeating_draft(settings, monkeypatch) -> None:
+    flow = offline_flow(settings)
+    project = flow.create_project("Test resumable history snapshot failure.")
+    original_snapshot = flow.store.snapshot_project
+
+    def fail_drafting_snapshot(item, reason, *, stage=None, kind="change"):
+        if stage == "drafting" and kind == "stage":
+            raise PermissionError("测试历史快照被占用")
+        return original_snapshot(item, reason, stage=stage, kind=kind)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(flow.store, "snapshot_project", fail_drafting_snapshot)
+        with pytest.raises(PermissionError, match="历史快照被占用"):
+            await flow.run(project.id)
+    failed = flow.store.get_project(project.id)
+    assert failed.stage == Stage.REVIEWING
+    assert "drafting" in failed.state["completed_stages"]
+    assert flow.store.artifact_path(project.id, "paper-draft.md") is not None
+    resumed = await flow.resume(project.id)
+    assert resumed.stage == Stage.COMPLETED
+    assert resumed.status.value != "failed"
+    assert resumed.state["completed_stages"].count("drafting") == 1

@@ -43,3 +43,32 @@ def test_project_skill_files_match_packaged_runtime_copies() -> None:
         packaged = (root / "src" / "scholaros" / "skills" / name / "SKILL.md").read_bytes()
         assert source == packaged, name
         assert b"model-instructions:start" in source
+
+
+@pytest.mark.asyncio
+async def test_ieee_english_rewrite_preserves_full_manuscript_request() -> None:
+    class RecordingModel:
+        def __init__(self) -> None:
+            self.messages = []
+
+        async def turn(self, messages, tools):
+            self.messages = list(messages)
+            return ModelTurn("# English Title\n\n## Abstract\nEnglish abstract.\n\n## Keywords\nprotocol\n\n## Introduction\nText.\n\n## Conclusion\nEnd.\n\n## References\n")
+
+    model = RecordingModel()
+    revised = await ResearchWriter(model).ensure_ieee_english("# 中文标题\n\n## 摘要\n中文摘要")
+    assert revised.startswith("# English Title")
+    assert "Translate every heading and prose paragraph" in model.messages[1].content
+    assert "and References" in model.messages[1].content
+
+
+@pytest.mark.asyncio
+async def test_ieee_rewrite_rejects_lost_citation_keys() -> None:
+    class DroppingModel:
+        async def turn(self, messages, tools):
+            return ModelTurn("# English Title\n\n## Abstract\nThe source was omitted.")
+
+    with pytest.raises(ValueError, match="丢失原稿引用键"):
+        await ResearchWriter(DroppingModel()).ensure_ieee_english(
+            "# 中文标题\n\n## 引言\n证据 [@Source1]。"
+        )

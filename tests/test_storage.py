@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from scholaros import storage
+from scholaros.domain import Project
 from scholaros.storage import ProjectBusyError, ProjectStore
 
 PROJECT_ID = "123456abcdef"
@@ -157,3 +158,117 @@ def test_cli_help_starts_on_current_platform() -> None:
     )
     assert result.returncode == 0, result.stderr
     assert "serve" in result.stdout
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows 目录重命名锁定行为")
+@pytest.mark.parametrize("winerror", [5, 32])
+def test_snapshot_retries_transient_windows_directory_lock(settings, monkeypatch, winerror) -> None:
+    store = ProjectStore(settings)
+    project = Project(id=PROJECT_ID, idea="测试历史快照重试")
+    store.save_artifact(PROJECT_ID, "paper.md", "测试论文")
+    original_rename = Path.rename
+    attempts = 0
+    delays = []
+
+    def intermittently_locked(path, target):
+        nonlocal attempts
+        if path.parent.name == "history" and path.name.endswith(".tmp"):
+            attempts += 1
+            if attempts < 3:
+                raise OSError(0, "文件被暂时占用", str(path), winerror)
+        return original_rename(path, target)
+
+    monkeypatch.setattr(Path, "rename", intermittently_locked)
+    monkeypatch.setattr(storage.time, "sleep", delays.append)
+    revision = store.snapshot_project(project, "阶段完成")
+    assert attempts == 3
+    assert delays == [0.1, 0.2]
+    assert store.history_artifact_path(PROJECT_ID, revision, "paper.md").read_text(encoding="utf-8") == "测试论文"
+    assert not list((settings.artifacts_path / PROJECT_ID / "history").glob(".*.tmp"))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows 目录重命名锁定行为")
+def test_snapshot_permission_error_exhausts_retries_without_partial_history(settings, monkeypatch) -> None:
+    store = ProjectStore(settings)
+    project = Project(id=PROJECT_ID, idea="测试持久权限失败")
+    attempts = 0
+    original_rename = Path.rename
+
+    def denied(path, target):
+        nonlocal attempts
+        if path.parent.name == "history" and path.name.endswith(".tmp"):
+            attempts += 1
+            raise OSError(0, "拒绝访问", str(path), 5)
+        return original_rename(path, target)
+
+    monkeypatch.setattr(Path, "rename", denied)
+    monkeypatch.setattr(storage.time, "sleep", lambda _: None)
+    with pytest.raises(PermissionError, match="拒绝访问"):
+        store.snapshot_project(project, "阶段完成")
+    assert attempts == 5
+    assert store.list_history(PROJECT_ID) == []
+    assert not list((settings.artifacts_path / PROJECT_ID / "history").glob(".*.tmp"))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows 目录重命名锁定行为")
+def test_snapshot_cleanup_retries_without_masking_original_failure(settings, monkeypatch) -> None:
+    store = ProjectStore(settings)
+    project = Project(id=PROJECT_ID, idea="测试快照清理")
+    original_rmtree = storage.shutil.rmtree
+    cleanups = 0
+
+    def denied_rename(path, target):
+        raise OSError(0, "拒绝访问", str(path), 5)
+
+    def temporarily_denied_cleanup(path, *args, **kwargs):
+        nonlocal cleanups
+        cleanups += 1
+        if cleanups < 3:
+            raise OSError(0, "暂时占用", str(path), 32)
+        return original_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "rename", denied_rename)
+    monkeypatch.setattr(storage.shutil, "rmtree", temporarily_denied_cleanup)
+    monkeypatch.setattr(storage.time, "sleep", lambda _: None)
+    with pytest.raises(PermissionError, match="可从断点继续") as caught:
+        store.snapshot_project(project, "阶段完成")
+    assert caught.value.__cause__.winerror == 5
+    assert cleanups == 3
+    assert not list((settings.artifacts_path / PROJECT_ID / "history").glob(".*.tmp"))
+
+
+def test_snapshot_prunes_only_old_known_temporary_directories(settings) -> None:
+    store = ProjectStore(settings)
+    root = settings.artifacts_path / PROJECT_ID / "history"
+    root.mkdir(parents=True)
+    stale = root / ("." + "a" * 32 + ".tmp")
+    recent = root / ("." + "b" * 32 + ".tmp")
+    unrelated = root / "keep-user-files"
+    for path in (stale, recent, unrelated):
+        path.mkdir()
+        (path / "note.txt").write_text("content", encoding="utf-8")
+    old = storage.time.time() - 25 * 3600
+    os.utime(stale, (old, old))
+    os.utime(unrelated, (old, old))
+    store.snapshot_project(Project(id=PROJECT_ID, idea="测试过期清理"), "阶段完成")
+    assert not stale.exists()
+    assert recent.is_dir()
+    assert unrelated.is_dir()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows 目录重命名错误码")
+def test_snapshot_does_not_retry_unrelated_windows_error(settings, monkeypatch) -> None:
+    store = ProjectStore(settings)
+    attempts = 0
+
+    def unrelated_error(path, target):
+        nonlocal attempts
+        attempts += 1
+        raise OSError(0, "目标目录已存在", str(path), 183)
+
+    monkeypatch.setattr(Path, "rename", unrelated_error)
+    monkeypatch.setattr(storage.time, "sleep", lambda _: pytest.fail("不应重试目标冲突"))
+    with pytest.raises(FileExistsError):
+        store.snapshot_project(Project(id=PROJECT_ID, idea="测试错误码"), "阶段完成")
+    assert attempts == 1
+    assert not list((settings.artifacts_path / PROJECT_ID / "history").glob(".*.tmp"))

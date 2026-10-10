@@ -303,6 +303,8 @@ hypotheses、independent_variables、dependent_variables、baselines 必须是�
         instruction: str = "",
     ) -> str:
         if self.model is None:
+            if (configuration or {}).get("latex_template") == "ieee_journal":
+                raise ValueError("IEEE 英文期刊稿需要可用写作模型或研究者提供完整英文稿；离线模式不能凭中文材料伪造英文论文。")
             return self._offline_paper(spec, papers, evidence, design)
         context = _evidence_context(evidence, documents)
         references = _references(papers, evidence)
@@ -352,6 +354,16 @@ hypotheses、independent_variables、dependent_variables、baselines 必须是�
             responsibility_rule = "“研究者责任与 AI 辅助说明”必须明确：系统只提供辅助；证据、方法、结果解释、署名和投稿决定由研究者人工核验并承担最终责任；按机构和期刊规则披露 AI 使用。"
             verify_rule = "对摘要级证据使用审慎措辞，明确正式投稿前需要原文核验。"
 
+        ieee_rule = (
+            "IEEEtran journal selected: write every heading and all manuscript prose in English. "
+            "Use one top-level title, ## Abstract, ## Keywords, then ## Introduction, "
+            "## Related Work, ## Methods, ## Experimental Design, ## Analysis Plan, "
+            "## Results Reporting Protocol (or Results when grounded results exist), "
+            "## Discussion and Limitations, ## Conclusion, and ## References. "
+            "Do not output Chinese translations alongside the English manuscript. "
+            "Do not invent author identities, findings or references."
+            if config.get("latex_template") == "ieee_journal" else ""
+        )
         prompt = f"""
 你是 ScholarOS 的研究写作辅助 Agent。请用{language}输出一篇供研究者审阅的 Markdown 研究草稿。
 
@@ -361,6 +373,7 @@ hypotheses、independent_variables、dependent_variables、baselines 必须是�
 研究分析边界：{config.get('research_mode', 'agent_decide')}。
 研究者确认的本阶段修改要求：{instruction or '无'}
 {reference_target}
+{ieee_rule}
 
 研究规格：
 {json.dumps(spec.to_dict(), ensure_ascii=False)}
@@ -384,7 +397,36 @@ hypotheses、independent_variables、dependent_variables、baselines 必须是�
 {references}
 """.strip()
         text = await self._ask("研究写作辅助 Agent", prompt)
-        return _strip_markdown_fence(text)
+        manuscript = _strip_markdown_fence(text)
+        if config.get("latex_template") == "ieee_journal":
+            manuscript = await self.ensure_ieee_english(manuscript)
+        return manuscript
+
+    async def ensure_ieee_english(self, paper: str) -> str:
+        """英文期刊稿若混入中文，只能由模型改写，不做丢失内容的机械替换。"""
+
+        if not re.search(r"[\u3400-\u9fff]", paper):
+            return paper
+        if self.model is None:
+            raise ValueError("IEEE 稿含中文且没有可用的英文改写模型；请提供英文稿。")
+        prompt = (
+            "Rewrite the complete Markdown manuscript in English for an IEEEtran journal. "
+            "Translate every heading and prose paragraph, preserving all verifiable claims, "
+            "citation keys, source metadata, results and epistemic caveats. "
+            "Use Title, Abstract, Keywords, Introduction, Related Work, Methods, "
+            "Experimental Design, Analysis Plan, Results or Results Reporting Protocol, "
+            "Discussion and Limitations, Conclusion, and References. "
+            "Do not invent facts, references, data, authors or translations of proper names "
+            "that cannot be verified. Output only the full English Markdown paper.\n\n" + paper
+        )
+        revised = _strip_markdown_fence(await self._ask("修订辅助 Agent", prompt))
+        if re.search(r"[\u3400-\u9fff]", revised):
+            raise ValueError("英文改写后 IEEE 稿仍含中文，请人工修订；不得改用通用模板。")
+        original_keys = set(re.findall(r"\[@([A-Za-z0-9_.:-]+)\]", paper))
+        revised_keys = set(re.findall(r"\[@([A-Za-z0-9_.:-]+)\]", revised))
+        if not original_keys <= revised_keys:
+            raise ValueError("英文改写丢失原稿引用键；请人工检查并重试。")
+        return revised
 
     async def revise(
         self,

@@ -31,19 +31,31 @@ def prepare_delivery(project: Project, store: ProjectStore) -> dict[str, Any]:
     markdown = paper_path.read_text(encoding="utf-8")
     config = normalize_configuration(project.state.get("configuration"))
     requested = list(config["formats"])
+    conversion_issue = ""
 
     if "docx" in requested:
         store.save_artifact(project.id, "paper.docx", markdown_to_docx(markdown))
     if "tex" in requested:
-        store.save_artifact(
-            project.id,
-            "paper.tex",
-            markdown_to_tex(markdown, template=config["latex_template"]),
-        )
+        try:
+            tex = markdown_to_tex(markdown, template=config["latex_template"])
+        except ValueError as exc:
+            if config["latex_template"] != "ieee_journal":
+                raise
+            tex = None
+            conversion_issue = str(exc)
+        else:
+            conversion_issue = ""
+        if tex is not None:
+            store.save_artifact(project.id, "paper.tex", tex)
+        else:
+            # 不能让上一版 LaTeX 冒充当前中文稿的 IEEE 交付件。
+            store.clear_generated_artifacts(project.id, frozenset({"paper.tex"}))
 
     format_names = {"md": "paper.md", "docx": "paper.docx", "tex": "paper.tex", "pdf": "paper.pdf"}
     available_formats = [
-        item for item in requested if store.artifact_path(project.id, format_names[item]) is not None
+        item for item in requested
+        if not (item == "tex" and conversion_issue)
+        and store.artifact_path(project.id, format_names[item]) is not None
     ]
     missing_formats = [item for item in requested if item not in available_formats]
     blockers = []
@@ -52,6 +64,8 @@ def prepare_delivery(project: Project, store: ProjectStore) -> dict[str, Any]:
         blockers.append("最终质量检查尚未全部通过。")
     if missing_formats:
         blockers.append(f"缺少请求格式：{', '.join(missing_formats)}。")
+    if "tex" in requested and conversion_issue:
+        blockers.append(conversion_issue)
     unresolved = [
         item
         for item in project.state.get("feedback", [])
@@ -59,14 +73,14 @@ def prepare_delivery(project: Project, store: ProjectStore) -> dict[str, Any]:
     ]
     if unresolved:
         blockers.append(f"仍有 {len(unresolved)} 条返修意见需要处理。")
-    tex_path = store.artifact_path(project.id, "paper.tex")
+    tex_path = store.artifact_path(project.id, "paper.tex") if "tex" in available_formats else None
     ieee_requested = config["latex_template"] == "ieee_journal"
     ieee_generated = (
         tex_path is not None
         and "\\documentclass[journal]{IEEEtran}" in tex_path.read_text(encoding="utf-8").splitlines()[:2]
     )
     if ieee_requested and tex_path is not None and not ieee_generated:
-        blockers.append("稿件含非英文内容，无法应用所选 IEEE 期刊模板；请修订英文稿后重新生成。")
+        blockers.append("paper.tex 未使用 IEEEtran 期刊文档类，请重新生成。")
     if ieee_requested:
         warnings.append("IEEE 期刊稿仅提供排版骨架；作者信息、引文、图表及目标期刊规则需人工核验。")
     if config["requested_scope"] == "submission_package":
@@ -97,14 +111,38 @@ def prepare_delivery(project: Project, store: ProjectStore) -> dict[str, Any]:
         else []
     )
     if ieee_requested and ieee_generated:
+        tex_source = tex_path.read_text(encoding="utf-8")
+        required = [
+            ("title", r"\\title\{"),
+            ("maketitle", r"\\maketitle"),
+            ("abstract", r"\\begin\{abstract\}\s*\S"),
+            ("keywords", r"\\begin\{IEEEkeywords\}\s*\S"),
+            ("introduction", r"\\section\{Introduction\}"),
+            ("related work", r"\\section\{Related Work\}"),
+            ("methods", r"\\section\{Methods\}"),
+            ("experimental design", r"\\section\{Experimental Design\}"),
+            ("analysis plan", r"\\section\{Analysis Plan\}"),
+            ("results", r"\\section\{Results(?: Reporting Protocol)?\}"),
+            ("discussion", r"\\section\{Discussion(?: and Limitations)?\}"),
+            ("conclusion", r"\\section\{Conclusion\}"),
+            ("bibliography", r"\\begin\{thebibliography\}"),
+        ]
+        matches = [(name, re.search(pattern, tex_source)) for name, pattern in required]
+        missing_sections = [name for name, match in matches if match is None]
+        if missing_sections:
+            blockers.append(f"IEEE 稿缺少必要结构：{', '.join(missing_sections)}。")
+        positions = [match.start() for _, match in matches if match is not None]
+        if positions != sorted(positions):
+            blockers.append("IEEE 稿章节顺序不符合期刊骨架。")
         if {item["name"] for item in template_files} != {"IEEEtran.cls", "IEEEtran.bst"}:
             blockers.append("IEEE 模板资源不完整；交付包不可独立编译。")
-        tex_source = tex_path.read_text(encoding="utf-8")
         cited = set(re.findall(r"\\cite\{([^}]+)\}", tex_source))
         referenced = set(re.findall(r"\\bibitem\{([^}]+)\}", tex_source))
         unresolved = sorted(cited - referenced)
         if unresolved:
             blockers.append(f"IEEE 稿有未匹配参考文献的引文键：{', '.join(unresolved)}。")
+        if not referenced:
+            blockers.append("IEEE 稿尚无可核验参考文献条目；请补充原文核验后的引用。")
         if any(key.startswith("UnverifiedRef") for key in referenced):
             blockers.append("编号参考文献缺少可核验引用键；请为条目补充 [@cite_key]。")
     manifest = {
@@ -244,9 +282,8 @@ def markdown_to_tex(markdown: str, *, template: str = "generic") -> str:
 
     if template not in {"generic", "ieee_journal"}:
         raise ValueError("未知 LaTeX 模板")
-    requested_ieee = template == "ieee_journal"
-    if requested_ieee and _contains_cjk(markdown):
-        template = "generic"
+    if template == "ieee_journal" and _contains_cjk(markdown):
+        raise ValueError("IEEE 期刊稿仍含中文；须先生成完整英文稿，不能暗中改用通用模板。")
     title, body, abstract, keywords, references = _tex_body(markdown)
     if template == "ieee_journal":
         document_class = _ieee_document_class()
@@ -270,19 +307,17 @@ def markdown_to_tex(markdown: str, *, template: str = "generic") -> str:
             preface.extend(["\\begin{IEEEkeywords}", *keywords, "\\end{IEEEkeywords}"])
         else:
             preface.append("\\noindent\\textbf{Keywords:} " + " ".join(keywords) + "\\par")
-    if references:
-        body.extend(["\\begin{thebibliography}{" + str(len(references)) + "}",
+    if references or template == "ieee_journal":
+        body.extend(["\\begin{thebibliography}{" + str(max(1, len(references))) + "}",
                      *[f"\\bibitem{{{key}}} {value}" for key, value in references],
                      "\\end{thebibliography}"])
     return (
-        ("% 所选 IEEE 模板未应用：稿件含非英文内容，请修订后重新生成。\n"
-         if requested_ieee and template == "generic" else "")
-        + f"{document_class}\n"
+        f"{document_class}\n"
         + "\n".join(packages)
         + "\n"
+        "\\begin{document}\n"
         "\\title{" + title + "}\n"
         "\\author{Author information to be confirmed}\n"
-        "\\begin{document}\n"
         "\\maketitle\n"
         + "\n".join(preface + body)
         + "\n\\end{document}\n"
@@ -304,7 +339,8 @@ def _tex_body(markdown: str) -> tuple[str, list[str], list[str], list[str], list
         line = raw_line.rstrip()
         heading = re.match(r"^(#{1,6})\s+(.+)$", line)
         if heading:
-            name = heading.group(2).strip().casefold()
+            heading_text = re.sub(r"^\d+(?:\.\d+)*[.)]?\s+", "", heading.group(2).strip())
+            name = heading_text.casefold()
             if not seen_heading and len(heading.group(1)) == 1:
                 title = _tex_text(heading.group(2))
                 seen_heading = True
@@ -319,7 +355,7 @@ def _tex_body(markdown: str) -> tuple[str, list[str], list[str], list[str], list
             else:
                 section = "body"
                 level = min(3, max(1, len(heading.group(1)) - 1))
-                body.append(f"\\{commands[level]}{{{_tex_text(heading.group(2))}}}")
+                body.append(f"\\{commands[level]}{{{_tex_text(heading_text)}}}")
             continue
         if not line.strip():
             if section == "body":

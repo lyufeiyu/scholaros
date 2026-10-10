@@ -414,14 +414,17 @@ class ResearchWorkflow:
                 markdown_path = self.store.artifact_path(project.id, markdown_name)
                 if markdown_path is None or self.store.artifact_path(project.id, tex_name) is not None:
                     continue
-                self.store.save_artifact(
-                    project.id,
-                    tex_name,
-                    markdown_to_tex(
+                try:
+                    tex = markdown_to_tex(
                         markdown_path.read_text(encoding="utf-8"),
                         template=configuration["latex_template"],
-                    ),
-                )
+                    )
+                except ValueError:
+                    if configuration["latex_template"] != "ieee_journal":
+                        raise
+                    # 旧中文稿保留 Markdown，待英文改写后再生成 IEEE 预览。
+                    continue
+                self.store.save_artifact(project.id, tex_name, tex)
             spec_value = project.state.get("spec")
             if isinstance(spec_value, dict) and not project.state.get("contribution_blueprint"):
                 blueprint = build_contribution_blueprint(_spec(spec_value))
@@ -1114,6 +1117,8 @@ class ResearchWorkflow:
                         documents,
                         configuration,
                     )
+                if configuration["latex_template"] == "ieee_journal":
+                    draft = await self.writer.ensure_ieee_english(draft)
                 self.store.save_artifact(project.id, "paper-draft.md", draft)
                 self.store.save_artifact(
                     project.id,
@@ -1202,6 +1207,9 @@ class ResearchWorkflow:
                         "figures": "applied" if figures_applied else "manual_required",
                     }
                     item["processed_at"] = utc_now()
+                configuration = normalize_configuration(project.state.get("configuration"))
+                if configuration["latex_template"] == "ieee_journal":
+                    revised = await self.writer.ensure_ieee_english(revised)
                 result_sources = [
                     item.get("text", "")
                     for item in self._load_document_text(project)
@@ -1214,7 +1222,6 @@ class ResearchWorkflow:
                 )
                 project.state["final_review"] = final_review.to_dict()
                 self.store.save_artifact(project.id, "paper.md", revised)
-                configuration = normalize_configuration(project.state.get("configuration"))
                 self.store.save_artifact(
                     project.id,
                     "paper.tex",

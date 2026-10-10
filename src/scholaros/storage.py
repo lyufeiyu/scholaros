@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import sqlite3
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from os import PathLike
@@ -311,6 +312,7 @@ class ProjectStore:
         self._validate_project_id(project.id)
         root = self.settings.artifacts_path / project.id / "history"
         root.mkdir(parents=True, exist_ok=True)
+        self._prune_stale_snapshots(root)
         revision = uuid4().hex
         temporary = root / f".{revision}.tmp"
         temporary.mkdir()
@@ -334,11 +336,54 @@ class ProjectStore:
             (temporary / "manifest.json").write_text(
                 json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
             )
-            temporary.rename(root / revision)
+            # Windows 中杀毒扫描或同步软件可能短暂占用刚写完的目录。
+            # 只重试目录被占用/拒绝访问，不掩盖真正的权限或磁盘错误。
+            for attempt in range(5):
+                try:
+                    temporary.rename(root / revision)
+                    break
+                except PermissionError as exc:
+                    if os.name != "nt" or exc.winerror not in {5, 32}:
+                        raise
+                    if attempt == 4:
+                        raise PermissionError(
+                            "历史快照目录持续被 Windows 拒绝访问；请检查文件占用、杀毒软件或目录权限。"
+                            "已完成阶段的成果仍在，可从断点继续。"
+                        ) from exc
+                    time.sleep(0.1 * 2**attempt)
         except BaseException:
-            shutil.rmtree(temporary)
+            for attempt in range(3):
+                try:
+                    shutil.rmtree(temporary)
+                    break
+                except OSError as cleanup_error:
+                    if (os.name == "nt" and cleanup_error.winerror in {5, 32}
+                            and attempt < 2):
+                        time.sleep(0.1 * 2**attempt)
+                        continue
+                    logger.warning(
+                        "项目 %s 的未完成历史快照未能清理：%s（%s）",
+                        project.id, temporary, cleanup_error,
+                    )
+                    break
             raise
         return revision
+
+    @staticmethod
+    def _prune_stale_snapshots(root: Path) -> None:
+        """仅清理本项目超过一天的临时快照，不触碰正式历史或活动目录。"""
+
+        for path in root.iterdir():
+            if not re.fullmatch(r"\.[a-f0-9]{32}\.tmp", path.name):
+                continue
+            try:
+                if (path.is_symlink() or getattr(path, "is_junction", lambda: False)()
+                        or path.resolve().parent != root.resolve()):
+                    continue
+                if path.is_dir() and time.time() - path.stat().st_mtime > 24 * 3600:
+                    shutil.rmtree(path)
+            except OSError as exc:
+                logger.warning("过期历史快照临时目录暂无法清理：%s（%s）", path, exc)
 
     def list_history(self, project_id: str) -> list[dict[str, Any]]:
         self._validate_project_id(project_id)

@@ -28,6 +28,15 @@ def _escape(value: str) -> str:
     return text
 
 
+def _strip_heading_number(heading: str) -> str:
+    """Markdown 已手工编号时去除阿拉伯、罗马及字母前缀，交由 IEEEtran 编号。"""
+
+    return re.sub(
+        r"^(?:(?:\d+(?:\.\d+)*|[IVXLCDM]+|[A-Z])\.)\s+",
+        "", heading.strip(),
+    )
+
+
 def reference_entries(markdown: str) -> list[tuple[str, str]]:
     """只从参考文献段提取键及原始条目，不推断未给出的书目信息。"""
 
@@ -36,7 +45,7 @@ def reference_entries(markdown: str) -> list[tuple[str, str]]:
     for line in markdown.splitlines():
         heading = re.match(r"^#{2,6}\s+(.+)$", line)
         if heading:
-            heading_name = re.sub(r"^\d+(?:\.\d+)*[.)]?\s+", "", heading.group(1)).casefold()
+            heading_name = _strip_heading_number(heading.group(1)).casefold()
             in_references = heading_name in {"references", "bibliography", "参考文献"}
             continue
         if not in_references or not line.strip() or re.fullmatch(r"\s*[-*_]{3,}\s*", line):
@@ -166,11 +175,30 @@ def _markdown_table(lines: list[str], *, results_available: bool) -> str:
     if columns < 2 or any(len(row) != columns for row in rows):
         raise ValueError("IEEE 稿含列数不一致的 Markdown 表格，请修正后重新生成。")
     rows = [row for row in rows if not all(re.fullmatch(r":?-{3,}:?", cell) for cell in row)]
-    if not results_available and any(
-        re.match(r"^[-+]?\d+(?:\.\d+)?(?:\s*[%({+-].*)?$", cell)
-        for row in rows[1:] for cell in row[1:]
-    ):
-        raise ValueError("IEEE 表格含未提供结果资料的数值；请改为 pending 或补充真实结果。")
+    if not results_available:
+        # 规划参数可包含数值；性能列则不能在缺少结果资料时冒充测量值。
+        design_header = re.compile(
+            r"rounds?|agent count|proposer count|sample(?:s| size)?|features|classes|"
+            r"budget|threshold|split|folds?|seeds?|top[- ]?k|decision rule|"
+            r"verification status|task type|matching status|layers|context window",
+            re.I,
+        )
+        outcome_header = re.compile(
+            r"accuracy|precision|recall|f1|ece|brier|auroc|auc|nll|latency|"
+            r"score|performance|win rate|success rate|bleu|rouge|effect size|"
+            r"p-value|significance|error rate|coverage|abstention|primary metric|result",
+            re.I,
+        )
+        numeric_value = re.compile(r"^[+-]?\d+(?:[.,]\d+)?(?=\s|$|[%()+\-±–,])")
+        if any(
+            re.search(r"(?:accuracy|score|f1|ece|auc|latency)\s*[=:]\s*\d", row[0], re.I)
+            for row in rows[1:]
+        ) or any(
+            numeric_value.match(row[index])
+            and (outcome_header.search(rows[0][index]) or not design_header.search(rows[0][index]))
+            for row in rows[1:] for index in range(1, columns)
+        ):
+            raise ValueError("IEEE 表格含未提供结果资料的数值；请改为 pending 或补充真实结果。")
     environment = "table*" if columns > 4 else "table"
     width = r"\textwidth" if columns > 4 else r"\columnwidth"
     content = " & ".join(_escape(cell) for cell in rows[0]) + r" \\"
@@ -197,13 +225,17 @@ def render_ieee_tex(markdown: str, *, comparison_plan: Mapping[str, Any] | None 
     figure_note_index: int | None = None
     table_lines: list[str] = []
     had_markdown_table = False
+    dataset_table_seen = False
+    table_notes = False
     heading_levels = {2: "section", 3: "subsection", 4: "subsubsection"}
     for line in markdown.splitlines():
         line = line.strip()
         if table_lines and not (line.startswith("|") and line.endswith("|")):
             body.append(_markdown_table(table_lines, results_available=bool(plan.get("results_available"))))
             table_lines = []
-        if section == "body" and not skip_notes and line.startswith("|") and line.endswith("|"):
+        if section == "body" and (not skip_notes or table_notes) and line.startswith("|") and line.endswith("|"):
+            if not table_lines and re.search(r"\bdataset\b", line, re.I):
+                dataset_table_seen = True
             table_lines.append(line)
             had_markdown_table = True
             continue
@@ -214,12 +246,13 @@ def render_ieee_tex(markdown: str, *, comparison_plan: Mapping[str, Any] | None 
         match = re.match(r"^(#{1,6})\s+(.+)$", line)
         if match:
             level = len(match.group(1))
-            heading = re.sub(r"^\d+(?:\.\d+)*[.)]?\s+", "", match.group(2).strip())
+            heading = _strip_heading_number(match.group(2))
             if level == 1 and title == "Research Manuscript":
                 title = heading
                 continue
             name = heading.casefold()
             skip_notes = False
+            table_notes = False
             figure_note_index = None
             if name in {"abstract", "摘要"}:
                 section = "abstract"
@@ -237,6 +270,7 @@ def render_ieee_tex(markdown: str, *, comparison_plan: Mapping[str, Any] | None 
                     figure_note_index = len(body) - 1
                 elif table:
                     skip_notes = True
+                    table_notes = True
                 else:
                     command = heading_levels.get(level, "subsubsection")
                     body.append(f"\\{command}{{{_escape(heading)}}}")
@@ -286,13 +320,11 @@ def render_ieee_tex(markdown: str, *, comparison_plan: Mapping[str, Any] | None 
         body.insert(position + 1, placeholder)
     tables = _planned_tables(plan)
     if had_markdown_table:
-        tables = tables[:1]
+        tables = [] if dataset_table_seen else tables[:1]
     position = next((index for index, value in enumerate(body) if value.startswith(r"\section{Experimental Design}")), len(body))
     body[position + 1:position + 1] = tables
-    journal_label = journal_name.strip()
-    if re.search(r"[\u3400-\u9fff]", journal_label):
-        journal_label = ""
-    journal = _escape(journal_label or "Journal name to be confirmed")
+    # 用户要求保留所给 IEEE 示例页眉；此处仅为样例排版，不代表实际刊发信息。
+    sample_header = r"Journal of \LaTeX\ Class Files,~Vol.~14, No.~8, August~2021"
     short_title = _escape(title[:65])
     return (
         "\\documentclass[lettersize,journal]{IEEEtran}\n"
@@ -301,7 +333,7 @@ def render_ieee_tex(markdown: str, *, comparison_plan: Mapping[str, Any] | None 
         "\\begin{document}\n"
         f"\\title{{{_escape(title)}}}\n"
         "\\author{Author information to be confirmed}\n"
-        f"\\markboth{{{journal},~Vol.~XX, No.~XX, Month~Year}}{{{short_title}}}\n"
+        f"\\markboth{{{sample_header}}}{{{short_title}}}\n"
         "\\maketitle\n"
         "\\begin{abstract}\n" + "\n".join(abstract) + "\n\\end{abstract}\n"
         "\\begin{IEEEkeywords}\n" + "\n".join(keywords) + "\n\\end{IEEEkeywords}\n"

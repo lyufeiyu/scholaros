@@ -69,7 +69,7 @@ PLAN = {
 def test_ieee_sample_markdown_has_keywords_header_tables_and_figure_note() -> None:
     tex = markdown_to_tex(SAMPLE, template="ieee_journal", comparison_plan=PLAN)
     assert tex.startswith("\\documentclass[lettersize,journal]{IEEEtran}")
-    assert "\\markboth{" in tex and "Vol.~XX, No.~XX, Month~Year" in tex
+    assert r"\markboth{Journal of \LaTeX\ Class Files,~Vol.~14, No.~8, August~2021}" in tex
     assert "\\begin{IEEEkeywords}\nresearch agents, evidence, reliability\n\\end{IEEEkeywords}" in tex
     assert "Keywords:" not in tex.split("\\end{abstract}")[0]
     assert "Draft type" not in tex and "---" not in tex
@@ -107,7 +107,7 @@ def test_markdown_comparison_table_becomes_latex_float_without_literal_pipes() -
     assert "Benchmark A & RAG & pending & pending" in tex
     assert "|---|" not in tex
     assert "\\resizebox{\\columnwidth}" in tex
-    assert tex.count("\\begin{table}") == 2  # 数据集概况 + 文稿已有对比表
+    assert tex.count("\\begin{table}") == 1  # 已有数据集对比表，无重复通用占位表
 
 
 def test_ieee_delivery_zip_has_main_tex_bib_and_only_required_runtime_files(settings) -> None:
@@ -200,3 +200,65 @@ def test_malformed_markdown_table_blocks_instead_of_losing_structure() -> None:
     )
     with pytest.raises(ValueError, match="列数不一致"):
         markdown_to_tex(source, template="ieee_journal", comparison_plan=PLAN)
+
+
+def test_planned_counts_rounds_and_thresholds_do_not_count_as_results() -> None:
+    markdown = SAMPLE.replace(
+        "Predefine each comparison condition.",
+        "Predefine each comparison condition.\n\n"
+        "|Topology|Rounds (proposed)|Agent Count (proposed)|Threshold|\n"
+        "|---|---|---|---|\n"
+        "|Chain|1, 2, 4|2–5|pending|\n"
+        "|Star|1|3–6|pending|",
+    )
+    tex = markdown_to_tex(markdown, template="ieee_journal", comparison_plan=PLAN)
+    assert "Chain & 1, 2, 4 & 2–5 & pending" in tex
+
+
+def test_ieee_header_and_roman_section_labels_match_user_sample() -> None:
+    markdown = SAMPLE.replace("## 1. Introduction", "## I. Introduction").replace(
+        "Sources must be checked before submission.",
+        "Sources must be checked before submission.\n\n### A. Evidence Scope\nAbstracts need verification.",
+    )
+    tex = markdown_to_tex(markdown, template="ieee_journal", comparison_plan=PLAN)
+    assert r"\markboth{Journal of \LaTeX\ Class Files,~Vol.~14, No.~8, August~2021}" in tex
+    assert "Journal name to be confirmed" not in tex
+    assert r"\section{Introduction}" in tex
+    assert r"\subsection{Evidence Scope}" in tex
+    assert r"\section{I. Introduction}" not in tex
+
+
+def test_tables_inside_design_notes_are_kept_and_not_replaced_by_generic_tables() -> None:
+    markdown = SAMPLE.replace(
+        "## 4. Experimental Design\nPredefine each comparison condition.",
+        "## IV. Experimental Design\nPredefine each comparison condition.\n\n"
+        "### F. Table 1 Design Notes\nPlanned dataset comparison.\n\n"
+        "|Dataset|Baseline|Primary Metric|\n|---|---|---|\n"
+        "|HotpotQA (proposed)|Sparse debate|Accuracy, ECE|\n\n"
+        "### G. Table 2 Design Notes\nTopology settings.\n\n"
+        "|Topology|Rounds (proposed)|Agent Count (proposed)|\n|---|---|---|\n"
+        "|Star|1, 2, 4|3–6|",
+    )
+    tex = markdown_to_tex(markdown, template="ieee_journal", comparison_plan=PLAN)
+    assert "HotpotQA (proposed) & Sparse debate & Accuracy, ECE" in tex
+    assert "Star & 1, 2, 4 & 3–6" in tex
+    assert "Dataset to be confirmed" not in tex
+    assert tex.count(r"\begin{table}") + tex.count(r"\begin{table*}") == 2
+
+
+def test_performance_values_cannot_hide_in_threshold_header_or_first_column() -> None:
+    for table in (
+        "|Method|Accuracy at threshold|\n|---|---|\n|Ours|92.4|",
+        "|Method|Latency|\n|---|---|\n|Ours|92.4 ms|",
+        "|Method|Accuracy|\n|---|---|\n|Ours|92.4 ± 0.3|",
+        "|Outcome|Decision rule|\n|---|---|\n|Accuracy=92.4|pending|",
+    ):
+        source = SAMPLE.replace("Predefine each comparison condition.", "Predefine each comparison condition.\n\n" + table)
+        with pytest.raises(ValueError, match="未提供结果资料的数值"):
+            markdown_to_tex(source, template="ieee_journal", comparison_plan=PLAN)
+
+
+def test_roman_numbered_references_are_exported_to_bib() -> None:
+    source = SAMPLE.replace("## References", "## VII. References")
+    bib = markdown_to_bib(source)
+    assert "@misc{Source1," in bib

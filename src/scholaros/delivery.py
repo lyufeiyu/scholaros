@@ -93,7 +93,7 @@ def prepare_delivery(project: Project, store: ProjectStore) -> dict[str, Any]:
     if ieee_requested and tex_path is not None and not ieee_generated:
         blockers.append("paper.tex 未使用 IEEEtran 期刊文档类，请重新生成。")
     if ieee_requested:
-        warnings.append("IEEE 期刊稿仅提供排版骨架；作者信息、引文、图表及目标期刊规则需人工核验。")
+        warnings.append("IEEE 页眉沿用所给 2021 年样例，仅供排版示意；作者、实际期刊卷期、引文和图表均需人工核验。")
     if config["requested_scope"] == "submission_package":
         warnings.append("作者、单位、伦理、基金和利益冲突元数据需在投稿前由研究者确认。")
 

@@ -22,6 +22,7 @@ from scholaros.domain import (
     Stage,
     utc_now,
 )
+from scholaros.ieee_format import markdown_to_bib
 from scholaros.ingestion import DocumentIngestor
 from scholaros.llm import OpenAICompatibleModel
 from scholaros.papers import PaperSearchService
@@ -47,6 +48,7 @@ DELIVERY_OUTPUT_ARTIFACTS = frozenset(
     {
         "paper.docx",
         "paper.tex",
+        "ref.bib",
         "paper.pdf",
         "delivery-manifest.json",
         "delivery-package.zip",
@@ -95,6 +97,7 @@ class ResearchWorkflow:
             "final-review.json",
             "paper.docx",
             "paper.tex",
+            "ref.bib",
             "paper.pdf",
             "delivery-manifest.json",
             "delivery-package.zip",
@@ -415,9 +418,14 @@ class ResearchWorkflow:
                 if markdown_path is None or self.store.artifact_path(project.id, tex_name) is not None:
                     continue
                 try:
+                    markdown = markdown_path.read_text(encoding="utf-8")
+                    plan = dict(project.state.get("design") or {})
+                    plan["results_available"] = any(
+                        item.get("role") == "results" for item in project.state.get("documents", [])
+                    )
                     tex = markdown_to_tex(
-                        markdown_path.read_text(encoding="utf-8"),
-                        template=configuration["latex_template"],
+                        markdown, template=configuration["latex_template"],
+                        comparison_plan=plan, journal_name=configuration["target_name"],
                     )
                 except ValueError:
                     if configuration["latex_template"] != "ieee_journal":
@@ -425,6 +433,8 @@ class ResearchWorkflow:
                     # 旧中文稿保留 Markdown，待英文改写后再生成 IEEE 预览。
                     continue
                 self.store.save_artifact(project.id, tex_name, tex)
+                if configuration["latex_template"] == "ieee_journal":
+                    self.store.save_artifact(project.id, "ref.bib", markdown_to_bib(markdown))
             spec_value = project.state.get("spec")
             if isinstance(spec_value, dict) and not project.state.get("contribution_blueprint"):
                 blueprint = build_contribution_blueprint(_spec(spec_value))
@@ -1120,11 +1130,19 @@ class ResearchWorkflow:
                 if configuration["latex_template"] == "ieee_journal":
                     draft = await self.writer.ensure_ieee_english(draft)
                 self.store.save_artifact(project.id, "paper-draft.md", draft)
-                self.store.save_artifact(
-                    project.id,
-                    "paper-draft.tex",
-                    markdown_to_tex(draft, template=configuration["latex_template"]),
+                comparison_plan = dict(project.state["design"])
+                comparison_plan["results_available"] = any(
+                    item.get("role") == "results" for item in project.state.get("documents", [])
                 )
+                self.store.save_artifact(
+                    project.id, "paper-draft.tex",
+                    markdown_to_tex(
+                        draft, template=configuration["latex_template"],
+                        comparison_plan=comparison_plan, journal_name=configuration["target_name"],
+                    ),
+                )
+                if configuration["latex_template"] == "ieee_journal":
+                    self.store.save_artifact(project.id, "ref.bib", markdown_to_bib(draft))
 
             elif stage == Stage.REVIEWING:
                 draft_path = self.store.artifact_path(project.id, "paper-draft.md")
@@ -1222,11 +1240,20 @@ class ResearchWorkflow:
                 )
                 project.state["final_review"] = final_review.to_dict()
                 self.store.save_artifact(project.id, "paper.md", revised)
+                comparison_plan = dict(project.state["design"])
+                comparison_plan["results_available"] = any(
+                    item.get("role") == "results" for item in project.state.get("documents", [])
+                )
                 self.store.save_artifact(
                     project.id,
                     "paper.tex",
-                    markdown_to_tex(revised, template=configuration["latex_template"]),
+                    markdown_to_tex(
+                        revised, template=configuration["latex_template"],
+                        comparison_plan=comparison_plan, journal_name=configuration["target_name"],
+                    ),
                 )
+                if configuration["latex_template"] == "ieee_journal":
+                    self.store.save_artifact(project.id, "ref.bib", markdown_to_bib(revised))
                 self.store.save_artifact(
                     project.id,
                     "final-review.json",
@@ -1385,11 +1412,15 @@ class ResearchWorkflow:
             or parameter.kind == inspect.Parameter.VAR_KEYWORD
             for parameter in parameters
         )
+        kwargs = {}
         if accepts_instruction:
-            return await method(
-                *args, instruction=self._stage_instruction(project, stage)
-            )
-        return await method(*args)
+            kwargs["instruction"] = self._stage_instruction(project, stage)
+        if method_name == "design" and any(
+            parameter.name == "configuration" or parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters
+        ):
+            kwargs["configuration"] = normalize_configuration(project.state.get("configuration"))
+        return await method(*args, **kwargs)
 
 
 def _spec(value: dict[str, Any]):

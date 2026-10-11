@@ -54,7 +54,7 @@ The terminal CLI and Web workspace share the same workflow. ScholarOS produces c
 - Every completed stage and the final workflow are saved to a project version timeline; historical versions can be opened directly in the current project view as read-only snapshots.
 - Figure plans render Mermaid flowcharts and table plans render as readable tables.
 - The Web workspace uses a calm blue-gray visual theme and a simplified project/material overview; API documentation remains available at `/docs`.
-- LaTeX output uses the local English IEEEtran journal template stored under `templates/ieee/`.
+- When explicitly selected, English IEEE journal output uses the bundled IEEEtran class and BibTeX style; the delivery ZIP includes `main.tex` and `ref.bib`. The target journal must still be verified by the authors.
 
 </details>
 

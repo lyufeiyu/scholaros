@@ -57,14 +57,14 @@ def test_docx_and_tex_exports_are_editable_and_ingestible(tmp_path) -> None:
     assert "研究标题" in chinese_tex
 
     english_tex = markdown_to_tex("# Research Title\n\nBody cites [@Source1] with **emphasis**.", template="ieee_journal")
-    assert "\\documentclass[journal]{IEEEtran}" in english_tex
+    assert "\\documentclass[lettersize,journal]{IEEEtran}" in english_tex
     assert "\\cite{Source1}" in english_tex
     from scholaros.delivery import IEEE_TEMPLATE_ROOT
 
     assert (IEEE_TEMPLATE_ROOT / "IEEEtran.cls").exists()
 
 
-def test_ieee_tex_uses_native_abstract_keywords_and_bibitems() -> None:
+def test_ieee_tex_uses_native_abstract_keywords_and_external_bibtex() -> None:
     source = (
         "# Research Title\n\n## Abstract\nA cautious abstract.\n\n"
         "## Keywords\nresearch, verification\n\n## Introduction\n"
@@ -76,7 +76,9 @@ def test_ieee_tex_uses_native_abstract_keywords_and_bibitems() -> None:
     assert "\\begin{IEEEkeywords}\nresearch, verification\n\\end{IEEEkeywords}" in tex
     assert "\\section{Introduction}" in tex
     assert "\\cite{Source1}" in tex
-    assert "\\bibitem{Source1}" in tex
+    assert "\\bibliography{ref}" in tex
+    assert "\\bibliographystyle{IEEEtran}" in tex
+    assert "\\bibitem" not in tex
     assert tex.count("\\cite{Source1}") == 1
     assert "\\section{References}" not in tex
     assert tex.index("\\end{abstract}") < tex.index("\\section{Introduction}")
@@ -119,18 +121,19 @@ async def test_ieee_request_generates_english_draft_and_ieee_tex(settings) -> No
     tex = flow.store.artifact_path(project.id, "paper.tex")
     assert tex is not None
     content = tex.read_text(encoding="utf-8")
-    assert content.startswith("\\documentclass[journal]{IEEEtran}")
+    assert content.startswith("\\documentclass[lettersize,journal]{IEEEtran}")
     assert "\\begin{abstract}" in content
     assert "\\begin{IEEEkeywords}" in content
     assert "\\section{Introduction}" in content
     assert "\\section{Conclusion}" in content
-    assert "\\begin{thebibliography}" in content
+    assert "\\bibliography{ref}" in content
     assert not re.search(r"[\u3400-\u9fff]", content)
     manuscript = flow.store.artifact_path(project.id, "paper.md").read_text(encoding="utf-8")
     assert "## Introduction" in manuscript
     assert "traceable evidence synthesis" in manuscript
     assert "No results are asserted before data collection" in manuscript
-    assert "\\bibitem{Protocol1}" in content
+    assert "\\bibliography{ref}" in content
+    assert "@misc{Protocol1," in flow.store.artifact_path(project.id, "ref.bib").read_text(encoding="utf-8")
     manifest = prepare_delivery(completed, flow.store)
     assert {item["name"] for item in manifest["template_files"]} == {"IEEEtran.cls", "IEEEtran.bst"}
     assert not any("缺少必要结构" in issue for issue in manifest["blockers"])
@@ -192,12 +195,16 @@ def test_ieee_numbered_references_are_preserved_but_not_misassigned(settings) ->
     )
     manifest = prepare_delivery(project, flow.store)
     tex = flow.store.artifact_path(project.id, "paper.tex").read_text(encoding="utf-8")
-    assert "\\bibitem{UnverifiedRef1} A. Author. Journal, 2024. Continued venue details." in tex
+    assert "\\bibliography{ref}" in tex
+    bib = flow.store.artifact_path(project.id, "ref.bib").read_text(encoding="utf-8")
+    assert "@misc{UnverifiedRef1," in bib
+    assert "Continued venue details" in bib
     assert not manifest["ready"]
     assert any("未匹配" in issue for issue in manifest["blockers"])
     assert any("缺少可核验引用键" in issue for issue in manifest["blockers"])
-    keyed = markdown_to_tex("# Title\n\n## References\n1. [@X] A. Author. Journal, 2024.", template="ieee_journal")
-    assert "\\bibitem{X}" in keyed
+    from scholaros.ieee_format import markdown_to_bib
+    keyed = markdown_to_bib("# Title\n\n## References\n1. [@X] A. Author. Journal, 2024.")
+    assert "@misc{X," in keyed
 
 
 def test_ieee_delivery_blocks_missing_or_disordered_sections(settings) -> None:

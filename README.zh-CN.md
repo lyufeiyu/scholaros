@@ -54,7 +54,7 @@ Question → Scope → Search → Evidence → Design → Draft → Review → R
 - 每个完成阶段和最终工作流都会自动保存到项目版本时间线；点击历史版本可在“当前研究项目”中以只读方式查看当时的完整状态。
 - 图件规划支持 Mermaid 流程图，表格规划支持可读表格呈现。
 - Web 工作台改为冷静蓝灰主题，最后阶段聚合为项目与材料总览；API 文档仍可通过 `/docs` 访问。
-- LaTeX 输出统一使用仓库 `templates/ieee/` 中的英文 IEEEtran 期刊模板。
+- 显式选择 IEEE 英文期刊时，交付包使用仓库中的 IEEEtran 类与 BibTeX 样式，并包含 `main.tex`、`ref.bib`；目标期刊要求仍须作者核验。
 
 </details>
 

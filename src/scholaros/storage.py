@@ -44,6 +44,7 @@ GENERATED_ARTIFACTS = frozenset(
         "final-review.json",
         "paper.docx",
         "paper.tex",
+        "ref.bib",
         "paper.pdf",
         "delivery-manifest.json",
         "delivery-package.zip",

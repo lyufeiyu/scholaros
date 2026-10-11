@@ -234,7 +234,8 @@ selection），后续短语可以是资料或用户明确提出的互补方法�
         return evidence
 
     async def design(
-        self, spec: ResearchSpec, evidence: Sequence[Evidence], instruction: str = ""
+        self, spec: ResearchSpec, evidence: Sequence[Evidence], instruction: str = "",
+        configuration: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         fallback = {
             "research_question": spec.question,
@@ -250,6 +251,9 @@ selection），后续短语可以是资料或用户明确提出的互补方法�
                 "实施成本与潜在副作用",
             ],
             "baselines": ["领域当前标准方法", "不采用拟议干预或方法的对照条件"],
+            "proposed_method": "Proposed method",
+            "datasets": [],
+            "metrics": [],
             "analysis": "报告效应量与置信区间；处理缺失值和多重比较，并以敏感性分析检验稳健性。",
             "ethics": "遵守资料许可；涉及参与者时取得知情同意；去标识化数据；人工核验引用和高风险结论。",
             "falsification": "若主要指标未达到预注册的最小效应标准，或稳健性检验不成立，则核心假设不成立。",
@@ -266,10 +270,13 @@ selection），后续短语可以是资料或用户明确提出的互补方法�
 研究规格：{json.dumps(spec.to_dict(), ensure_ascii=False)}
 证据摘要：{context or '暂无；只能提出待验证设计，不能虚构事实。'}
 研究者确认的本阶段修改要求：{instruction or '无'}
+期刊模板要求：{'若选 IEEE 期刊，baselines/datasets/metrics 的候选名称与描述均用英文，保留来源引用键，不要翻译或捏造未核实的专名。' if (configuration or {}).get('latex_template') == 'ieee_journal' else '遵循研究目标语言。'}
 
 只输出 JSON 对象，字段严格为：research_question、hypotheses、study_design、
-independent_variables、dependent_variables、baselines、analysis、ethics、falsification。
-hypotheses、independent_variables、dependent_variables、baselines 必须是字符串数组；不得虚构结果。
+independent_variables、dependent_variables、baselines、proposed_method、datasets、metrics、analysis、ethics、falsification。
+proposed_method 是简短英文方法名称，未确定时写 Proposed method。
+hypotheses、independent_variables、dependent_variables、baselines、datasets、metrics 必须是字符串数组。
+从证据与研究规格中挑选可追溯的候选数据集和具体算法基线，明确适用性、控制预算和未核验状态；不能从现有证据确定时 datasets/metrics 用空数组，不要杜撰。metrics 必须对应研究假设并说明计算方式/方向，不得虚构结果。
 """.strip()
         try:
             parsed = _parse_json_object(await self._ask("研究方法 Agent", prompt))
@@ -278,6 +285,8 @@ hypotheses、independent_variables、dependent_variables、baselines 必须是�
                 "independent_variables",
                 "dependent_variables",
                 "baselines",
+                "datasets",
+                "metrics",
             }
             design: dict[str, Any] = {}
             for key, default in fallback.items():
@@ -360,6 +369,17 @@ hypotheses、independent_variables、dependent_variables、baselines 必须是�
             "## Related Work, ## Methods, ## Experimental Design, ## Analysis Plan, "
             "## Results Reporting Protocol (or Results when grounded results exist), "
             "## Discussion and Limitations, ## Conclusion, and ## References. "
+            "Use ## Keywords as a separate section, not inline in Abstract. "
+            "Do not insert Markdown horizontal rules (---), numerical prefixes in headings, "
+            "or draft-status metadata before Abstract. "
+            "Select candidate datasets and named algorithm baselines from the supplied evidence, "
+            "state the reason, source citation key, compute/retrieval budget control, and verification status; "
+            "choose hypothesis-aligned metrics with definitions and directions. "
+            "If selection is unsupported, mark it pending rather than inventing a dataset. "
+            "Include a planned comparison table with dataset, baseline and metric headers and "
+            "non-numeric pending cells when results are unavailable; do not fabricate scores. "
+            "For each framework or explanatory figure provide one or two English sentences in "
+            "a 'Figure N Design Notes' subsection, for later blue placeholder rendering. "
             "Do not output Chinese translations alongside the English manuscript. "
             "Do not invent author identities, findings or references."
             if config.get("latex_template") == "ieee_journal" else ""

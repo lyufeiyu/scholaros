@@ -58,7 +58,8 @@ const artifactLabels = {
   "paper.md": "修订论文",
   "final-review.json": "最终质量检查报告",
   "paper.docx": "可编辑 Word 稿",
-  "paper.tex": "可编辑 LaTeX 源文件",
+  "paper.tex": "IEEE 主文稿（交付包内为 main.tex）",
+  "ref.bib": "BibTeX 参考文献库",
   "paper.pdf": "阅读版 PDF",
   "delivery-manifest.json": "交付清单",
   "delivery-package.zip": "本地交付包",
@@ -1168,7 +1169,7 @@ async function confirmStageEdit() {
 function renderArtifacts(project) {
   const container = element("artifactList");
   container.replaceChildren();
-  const manuscriptNames = new Set(["paper-draft.md", "paper-draft.tex", "paper.md", "paper.tex"]);
+  const manuscriptNames = new Set(["paper-draft.md", "paper-draft.tex", "paper.md", "paper.tex", "ref.bib"]);
   const artifacts = (project.artifacts || []).filter((name) => manuscriptNames.has(name));
   if (!artifacts.length) {
     const empty = document.createElement("p");

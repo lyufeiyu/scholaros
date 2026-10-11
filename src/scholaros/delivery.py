@@ -11,6 +11,7 @@ from typing import Any
 from xml.sax.saxutils import escape
 
 from scholaros.domain import Project, utc_now
+from scholaros.ieee_format import markdown_to_bib, render_ieee_tex
 from scholaros.storage import ProjectStore
 from scholaros.workspace import normalize_configuration
 
@@ -31,13 +32,21 @@ def prepare_delivery(project: Project, store: ProjectStore) -> dict[str, Any]:
     markdown = paper_path.read_text(encoding="utf-8")
     config = normalize_configuration(project.state.get("configuration"))
     requested = list(config["formats"])
+    ieee_requested = config["latex_template"] == "ieee_journal"
+    plan = dict(project.state.get("design") or {})
+    plan["results_available"] = any(
+        item.get("role") == "results" for item in project.state.get("documents", [])
+    )
     conversion_issue = ""
 
     if "docx" in requested:
         store.save_artifact(project.id, "paper.docx", markdown_to_docx(markdown))
     if "tex" in requested:
         try:
-            tex = markdown_to_tex(markdown, template=config["latex_template"])
+            tex = markdown_to_tex(
+                markdown, template=config["latex_template"],
+                comparison_plan=plan, journal_name=config["target_name"],
+            )
         except ValueError as exc:
             if config["latex_template"] != "ieee_journal":
                 raise
@@ -47,9 +56,11 @@ def prepare_delivery(project: Project, store: ProjectStore) -> dict[str, Any]:
             conversion_issue = ""
         if tex is not None:
             store.save_artifact(project.id, "paper.tex", tex)
+            if ieee_requested:
+                store.save_artifact(project.id, "ref.bib", markdown_to_bib(markdown))
         else:
-            # 不能让上一版 LaTeX 冒充当前中文稿的 IEEE 交付件。
-            store.clear_generated_artifacts(project.id, frozenset({"paper.tex"}))
+            # 不能让上一版 LaTeX 与参考文献冒充当前交付件。
+            store.clear_generated_artifacts(project.id, frozenset({"paper.tex", "ref.bib"}))
 
     format_names = {"md": "paper.md", "docx": "paper.docx", "tex": "paper.tex", "pdf": "paper.pdf"}
     available_formats = [
@@ -74,10 +85,10 @@ def prepare_delivery(project: Project, store: ProjectStore) -> dict[str, Any]:
     if unresolved:
         blockers.append(f"仍有 {len(unresolved)} 条返修意见需要处理。")
     tex_path = store.artifact_path(project.id, "paper.tex") if "tex" in available_formats else None
-    ieee_requested = config["latex_template"] == "ieee_journal"
     ieee_generated = (
         tex_path is not None
-        and "\\documentclass[journal]{IEEEtran}" in tex_path.read_text(encoding="utf-8").splitlines()[:2]
+        and "\\documentclass[lettersize,journal]{IEEEtran}"
+        in tex_path.read_text(encoding="utf-8").splitlines()[:2]
     )
     if ieee_requested and tex_path is not None and not ieee_generated:
         blockers.append("paper.tex 未使用 IEEEtran 期刊文档类，请重新生成。")
@@ -88,6 +99,8 @@ def prepare_delivery(project: Project, store: ProjectStore) -> dict[str, Any]:
 
     manuscript_files = [format_names[item] for item in available_formats]
     package_files = list(manuscript_files)
+    if ieee_requested and ieee_generated:
+        package_files.append("ref.bib")
     if config["requested_scope"] == "local_delivery":
         package_files.extend(SUPPORTING_ARTIFACTS)
 
@@ -102,7 +115,8 @@ def prepare_delivery(project: Project, store: ProjectStore) -> dict[str, Any]:
                 "name": name,
                 "bytes": len(content),
                 "sha256": hashlib.sha256(content).hexdigest(),
-                "role": _artifact_role(name),
+                "role": "bibliography" if name == "ref.bib" else _artifact_role(name),
+                "package_path": "main.tex" if name == "paper.tex" and ieee_generated else name,
             }
         )
     template_files = (
@@ -114,9 +128,10 @@ def prepare_delivery(project: Project, store: ProjectStore) -> dict[str, Any]:
         tex_source = tex_path.read_text(encoding="utf-8")
         required = [
             ("title", r"\\title\{"),
+            ("header", r"\\markboth\{"),
             ("maketitle", r"\\maketitle"),
-            ("abstract", r"\\begin\{abstract\}\s*\S"),
-            ("keywords", r"\\begin\{IEEEkeywords\}\s*\S"),
+            ("abstract", r"\\begin\{abstract\}"),
+            ("keywords", r"\\begin\{IEEEkeywords\}"),
             ("introduction", r"\\section\{Introduction\}"),
             ("related work", r"\\section\{Related Work\}"),
             ("methods", r"\\section\{Methods\}"),
@@ -125,24 +140,48 @@ def prepare_delivery(project: Project, store: ProjectStore) -> dict[str, Any]:
             ("results", r"\\section\{Results(?: Reporting Protocol)?\}"),
             ("discussion", r"\\section\{Discussion(?: and Limitations)?\}"),
             ("conclusion", r"\\section\{Conclusion\}"),
-            ("bibliography", r"\\begin\{thebibliography\}"),
+            ("bibliography style", r"\\bibliographystyle\{IEEEtran\}"),
+            ("bibliography file", r"\\bibliography\{ref\}"),
         ]
         matches = [(name, re.search(pattern, tex_source)) for name, pattern in required]
         missing_sections = [name for name, match in matches if match is None]
+        for environment in ("abstract", "IEEEkeywords"):
+            content = re.search(
+                rf"\\begin\{{{environment}\}}(.*?)\\end\{{{environment}\}}",
+                tex_source, re.DOTALL,
+            )
+            if content is None or not content.group(1).strip():
+                missing_sections.append(f"{environment} content")
         if missing_sections:
             blockers.append(f"IEEE 稿缺少必要结构：{', '.join(missing_sections)}。")
         positions = [match.start() for _, match in matches if match is not None]
         if positions != sorted(positions):
             blockers.append("IEEE 稿章节顺序不符合期刊骨架。")
+        if not re.search(r"\\begin\{table\*?\}", tex_source):
+            blockers.append("IEEE 稿缺少可审阅的对照表。")
+        if not re.search(r"\\textcolor\{blue\}\{Figure", tex_source):
+            blockers.append("IEEE 稿缺少待作者补充的图件说明。")
+        for field, label in (("datasets", "候选数据集"), ("baselines", "算法基线"),
+                             ("metrics", "评估指标")):
+            choices = plan.get(field) or []
+            if not any(isinstance(item, str) and item.strip() and not _contains_cjk(item)
+                       for item in choices):
+                blockers.append(f"IEEE 对比方案缺少可用的英文{label}，请依据证据选择并人工核验。")
         if {item["name"] for item in template_files} != {"IEEEtran.cls", "IEEEtran.bst"}:
             blockers.append("IEEE 模板资源不完整；交付包不可独立编译。")
         cited = set(re.findall(r"\\cite\{([^}]+)\}", tex_source))
-        referenced = set(re.findall(r"\\bibitem\{([^}]+)\}", tex_source))
+        bib_path = store.artifact_path(project.id, "ref.bib")
+        bib_source = bib_path.read_text(encoding="utf-8") if bib_path is not None else ""
+        referenced = set(re.findall(r"@\w+\{([A-Za-z0-9_.:-]+),", bib_source))
+        if bib_path is None:
+            blockers.append("IEEE 稿缺少 ref.bib，交付包无法解析引文。")
         unresolved = sorted(cited - referenced)
         if unresolved:
             blockers.append(f"IEEE 稿有未匹配参考文献的引文键：{', '.join(unresolved)}。")
         if not referenced:
             blockers.append("IEEE 稿尚无可核验参考文献条目；请补充原文核验后的引用。")
+        elif not cited:
+            blockers.append("IEEE 正文没有引用 ref.bib 中的任何条目，编译后的参考文献将为空。")
         if any(key.startswith("UnverifiedRef") for key in referenced):
             blockers.append("编号参考文献缺少可核验引用键；请为条目补充 [@cite_key]。")
     manifest = {
@@ -229,7 +268,6 @@ def markdown_to_docx(markdown: str) -> bytes:
 
 
 IEEE_TEMPLATE_ROOT = Path(__file__).resolve().parent / "templates" / "ieee"
-IEEE_JOURNAL_TEMPLATE = IEEE_TEMPLATE_ROOT / "bare_jrnl.tex"
 IEEE_TEMPLATE_FILES = (
     ("IEEEtran.cls", IEEE_TEMPLATE_ROOT / "IEEEtran.cls"),
     ("IEEEtran.bst", IEEE_TEMPLATE_ROOT / "IEEEtran.bst"),
@@ -254,73 +292,43 @@ def _ieee_template_records() -> list[dict[str, Any]]:
     return records
 
 
-def _ieee_template_source() -> str:
-    try:
-        return IEEE_JOURNAL_TEMPLATE.read_text(encoding="utf-8")
-    except OSError:
-        return ""
-
-
-def _ieee_document_class() -> str:
-    """从仓库内保存的 IEEEtran 期刊模板读取文档类声明。"""
-
-    template = _ieee_template_source()
-    match = re.search(r"^\\documentclass(?:\[[^]]+\])?\{IEEEtran\}", template, re.MULTILINE)
-    return match.group(0) if match else "\\documentclass[journal]{IEEEtran}"
-
-
-def _ieee_package_lines() -> list[str]:
-    """复用本地 bare_jrnl 模板中的实际宏包声明，避免只借用类名。"""
-
-    template = _ieee_template_source()
-    lines = re.findall(r"^\\usepackage(?:\[[^]]+\])?\{[^}]+\}", template, re.MULTILINE)
-    return list(dict.fromkeys(lines))
-
-
-def markdown_to_tex(markdown: str, *, template: str = "generic") -> str:
-    """把 Markdown 草稿转成通用或 IEEE 期刊 LaTeX；不虚构作者/参考文献信息。"""
+def markdown_to_tex(
+    markdown: str, *, template: str = "generic",
+    comparison_plan: Mapping[str, Any] | None = None, journal_name: str = "",
+) -> str:
+    """从 Markdown 生成通用稿或带独立 BibTeX 与对照表的 IEEE 期刊稿。"""
 
     if template not in {"generic", "ieee_journal"}:
         raise ValueError("未知 LaTeX 模板")
-    if template == "ieee_journal" and _contains_cjk(markdown):
-        raise ValueError("IEEE 期刊稿仍含中文；须先生成完整英文稿，不能暗中改用通用模板。")
-    title, body, abstract, keywords, references = _tex_body(markdown)
     if template == "ieee_journal":
-        document_class = _ieee_document_class()
-        packages = _ieee_package_lines()
-        if not packages:
-            packages = ["\\usepackage{amsmath,amssymb}", "\\usepackage{graphicx}", "\\usepackage{url}"]
-        if not any("hyperref" in line for line in packages):
-            packages.append("\\usepackage[hidelinks]{hyperref}")
-    else:
-        document_class = "\\documentclass{ctexart}" if _contains_cjk(markdown) else "\\documentclass{article}"
-        packages = [
-            "\\usepackage{amsmath,amssymb}", "\\usepackage{graphicx}",
-            "\\usepackage{booktabs}", "\\usepackage{url}",
-            "\\usepackage[hidelinks]{hyperref}",
-        ]
+        if _contains_cjk(markdown):
+            raise ValueError("IEEE 期刊稿仍含中文；须先生成完整英文稿，不能暗中改用通用模板。")
+        return render_ieee_tex(
+            markdown, comparison_plan=comparison_plan, journal_name=journal_name,
+        )
+    title, body, abstract, keywords, references = _tex_body(markdown)
+    document_class = "\\documentclass{ctexart}" if _contains_cjk(markdown) else "\\documentclass{article}"
+    packages = [
+        "\\usepackage{amsmath,amssymb}", "\\usepackage{graphicx}",
+        "\\usepackage{booktabs}", "\\usepackage{url}",
+        "\\usepackage[hidelinks]{hyperref}",
+    ]
     preface = []
     if abstract:
         preface.extend(["\\begin{abstract}", *abstract, "\\end{abstract}"])
     if keywords:
-        if template == "ieee_journal":
-            preface.extend(["\\begin{IEEEkeywords}", *keywords, "\\end{IEEEkeywords}"])
-        else:
-            preface.append("\\noindent\\textbf{Keywords:} " + " ".join(keywords) + "\\par")
-    if references or template == "ieee_journal":
-        body.extend(["\\begin{thebibliography}{" + str(max(1, len(references))) + "}",
+        preface.append("\\noindent\\textbf{Keywords:} " + " ".join(keywords) + "\\par")
+    if references:
+        body.extend(["\\begin{thebibliography}{" + str(len(references)) + "}",
                      *[f"\\bibitem{{{key}}} {value}" for key, value in references],
                      "\\end{thebibliography}"])
     return (
-        f"{document_class}\n"
-        + "\n".join(packages)
-        + "\n"
+        f"{document_class}\n" + "\n".join(packages) + "\n"
         "\\begin{document}\n"
         "\\title{" + title + "}\n"
         "\\author{Author information to be confirmed}\n"
         "\\maketitle\n"
-        + "\n".join(preface + body)
-        + "\n\\end{document}\n"
+        + "\n".join(preface + body) + "\n\\end{document}\n"
     )
 
 
@@ -397,7 +405,7 @@ def _delivery_zip(project_id: str, store: ProjectStore, manifest: Mapping[str, A
         for item in manifest["files"]:
             path = store.artifact_path(project_id, str(item["name"]))
             if path is not None:
-                archive.writestr(path.name, path.read_bytes())
+                archive.writestr(str(item.get("package_path", path.name)), path.read_bytes())
         for item in manifest.get("template_files", []):
             template_path = next(
                 (path for name, path in IEEE_TEMPLATE_FILES if name == item.get("name")),

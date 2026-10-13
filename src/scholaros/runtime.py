@@ -101,7 +101,7 @@ class ToolRegistry:
             raise ValueError(f"缺少工具参数：{', '.join(missing)}")
         properties = schema.get("properties", {})
         extra = set(arguments) - set(properties)
-        if properties and extra:
+        if extra:
             raise ValueError(f"未声明的工具参数：{', '.join(sorted(extra))}")
 
 

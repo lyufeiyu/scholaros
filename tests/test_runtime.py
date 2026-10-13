@@ -56,3 +56,57 @@ async def test_tool_errors_return_to_model() -> None:
     tool_message = next(message for message in loop.messages if message.role == "tool")
     assert tool_message.metadata["is_error"] is True
     assert "缺少工具参数" in tool_message.content
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "schema",
+    [
+        {"type": "object", "properties": {}},
+        {"type": "object", "properties": {}, "additionalProperties": False},
+        {"type": "object", "additionalProperties": False},
+    ],
+)
+async def test_parameterless_tool_rejects_extra_arguments_before_execution(schema) -> None:
+    executed = False
+
+    def handler(**kwargs):
+        nonlocal executed
+        executed = True
+        return kwargs
+
+    registry = ToolRegistry()
+    registry.register("empty", "无参数工具", schema, handler)
+
+    with pytest.raises(ValueError, match="未声明的工具参数：unexpected"):
+        await registry.execute(ToolCall("1", "empty", {"unexpected": "值"}))
+
+    assert executed is False
+
+
+@pytest.mark.asyncio
+async def test_parameterless_tool_accepts_empty_arguments() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        "empty", "无参数工具", {"type": "object", "properties": {}}, lambda: "执行成功"
+    )
+
+    assert await registry.execute(ToolCall("1", "empty", {})) == "执行成功"
+
+
+@pytest.mark.asyncio
+async def test_parameterless_tool_validation_error_returns_to_model() -> None:
+    model = ScriptedModel(
+        [
+            ModelTurn("", [ToolCall("1", "empty", {"unexpected": "值"})]),
+            ModelTurn("参数错误已处理"),
+        ]
+    )
+    registry = ToolRegistry()
+    registry.register("empty", "无参数工具", {"type": "object", "properties": {}}, lambda: "成功")
+    loop = AgentLoop(model, registry)
+
+    assert await loop.run("调用") == "参数错误已处理"
+    tool_message = next(message for message in loop.messages if message.role == "tool")
+    assert tool_message.metadata["is_error"] is True
+    assert "未声明的工具参数：unexpected" in tool_message.content

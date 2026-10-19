@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import re
+import tomllib
 import zipfile
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -14,8 +16,38 @@ from scholaros.domain import Stage
 from scholaros.ingestion import DocumentIngestor
 from scholaros.papers import MemorySource, PaperSearchService
 from scholaros.workflow import ResearchWorkflow
-from scholaros.workspace import normalize_configuration
+from scholaros.workspace import build_figure_story, normalize_configuration
 from scholaros.writing import ResearchWriter
+
+
+def test_project_and_package_versions_match() -> None:
+    project = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text(encoding="utf-8"))
+    assert project["project"]["version"] == __version__ == "0.4.0"
+
+
+def test_mechanism_figure_uses_project_specific_architecture_fields() -> None:
+    story = build_figure_story(
+        {"mechanism_figure": "prefer"},
+        has_results=False,
+        design={
+            "research_question": "Does the method improve robustness?",
+            "datasets": ["Benchmark dataset"],
+            "independent_variables": ["Fixed compute budget"],
+            "proposed_method": "Adaptive Routing",
+            "baselines": ["Static Routing"],
+            "metrics": ["Robust accuracy"],
+            "falsification": "No improvement under matched seeds",
+        },
+    )
+    mechanism = next(item for item in story if item["kind"] == "mechanism")
+    assert mechanism["architecture"] == {
+        "inputs": ["Benchmark dataset"],
+        "constraints": ["Fixed compute budget"],
+        "method": "Adaptive Routing",
+        "comparisons": ["Static Routing"],
+        "outputs": ["Robust accuracy"],
+        "validation": "No improvement under matched seeds",
+    }
 
 
 def offline_flow(settings) -> ResearchWorkflow:

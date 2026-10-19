@@ -76,6 +76,8 @@ def test_ieee_sample_markdown_has_keywords_header_tables_and_figure_note() -> No
     assert "\\section{Introduction}" in tex and "\\section{1. Introduction}" not in tex
     assert "\\textcolor{blue}{Figure 1:" in tex
     assert "\\begin{table}[!t]" in tex and "\\begin{table*}[!t]" in tex
+    assert r"\begin{tabular*}{\textwidth}" in tex
+    assert r"\multicolumn{2}{c}{Study Setup}" in tex
     assert "Benchmark A" in tex and "Majority-vote debate" in tex and "ECE" in tex
     assert tex.count("\\textit{pending}") >= 4
     assert "\\bibliographystyle{IEEEtran}\n\\bibliography{ref}" in tex

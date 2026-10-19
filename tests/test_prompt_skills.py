@@ -19,7 +19,7 @@ async def test_every_model_role_receives_only_relevant_skill_instructions() -> N
             self.messages = list(messages)
             return ModelTurn("ok")
 
-    assert len(ROLE_SKILLS) == 6
+    assert len(ROLE_SKILLS) == 7
     for role, selected in ROLE_SKILLS.items():
         model = RecordingModel()
         assert await ResearchWriter(model)._ask(role, "用户任务") == "ok"

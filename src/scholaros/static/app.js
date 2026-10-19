@@ -10,6 +10,24 @@ const state = {
   activeStageProjectId: null,
   pendingConfiguration: null,
   pollTimer: null,
+  experimentPollTimer: null,
+  experimentRequestId: 0,
+  uploadedFolderProjectId: null,
+  uploadedFolderId: null,
+  optimizationProposalId: null,
+  runPollTimer: null,
+  runRequestId: 0,
+  runDetailRequestId: 0,
+  selectedLocalRunId: null,
+  localRunDraftId: null,
+  localRunLogSize: 0,
+  localPaperRunId: null,
+  localPaperRequestId: 0,
+  pendingLocalRunId: null,
+  sectionViewKey: null,
+  sectionData: null,
+  selectedSectionIndex: null,
+  sectionRequestId: 0,
   toastTimer: null,
   interruptingProjectId: null,
   mermaidInitialized: false,
@@ -86,7 +104,10 @@ async function api(path, options = {}) {
   const contentType = response.headers.get("content-type") || "";
   const data = contentType.includes("application/json") ? await response.json() : await response.text();
   if (!response.ok) {
-    const detail = typeof data === "object" ? data.detail : data;
+    let detail = typeof data === "object" ? data.detail : data;
+    if (response.status === 404 && (detail === "Not Found" || !detail)) {
+      detail = "接口不存在（HTTP 404）。服务端可能仍是旧版本，请重启 scholaros serve 后重试。";
+    }
     throw new Error(detail || `请求失败（HTTP ${response.status}）`);
   }
   return data;
@@ -110,7 +131,18 @@ function setBusy(button, busy, label) {
 function showView(name) {
   document.querySelectorAll(".view").forEach((node) => node.classList.toggle("is-active", node.id === `${name}View`));
   document.querySelectorAll(".nav-button").forEach((node) => node.classList.toggle("is-active", node.dataset.view === name));
-  element("pageTitle").textContent = name === "workspace" ? "当前研究项目" : "研究工作台";
+  element("pageTitle").textContent = { workspace: "当前研究项目", experiments: "实验", projects: "研究工作台", runs: "本机运行" }[name];
+  if (name === "experiments") refreshExperiments().catch((error) => toast(error.message, true));
+  else {
+    state.experimentRequestId += 1;
+    stopExperimentPolling();
+  }
+  if (name === "runs") refreshLocalRuns().catch((error) => toast(error.message, true));
+  else {
+    state.runRequestId += 1;
+    state.runDetailRequestId += 1;
+    stopLocalRunPolling();
+  }
   if (name === "workspace") {
     element("workspaceEmpty").hidden = Boolean(state.currentProject);
     element("projectWorkspace").hidden = !state.currentProject;
@@ -150,7 +182,7 @@ function selectedSources(containerId) {
 async function loadHealth() {
   const health = await api("/health");
   state.health = health;
-  element("brandVersion").textContent = `v${health.version || "0.3.1"}`;
+  element("brandVersion").textContent = `v${health.version || "0.4.0"}`;
   const status = element("systemStatus");
   status.classList.add("is-on");
   status.lastChild.textContent = " 服务已连接";
@@ -183,27 +215,380 @@ async function loadHealth() {
 
 async function loadProjects() {
   state.projects = await api("/api/projects");
+  let localRuns = [];
+  try { localRuns = await api("/api/runs"); } catch { localRuns = []; }
+  const selector = element("experimentProject");
+  const selected = selector.value || state.currentProject?.id
+    || (state.projects.length === 1 ? state.projects[0].id : "");
+  selector.replaceChildren(new Option("请选择研究项目", ""));
+  for (const project of state.projects) selector.add(new Option(project.title || project.idea, project.id));
+  if (state.projects.some((project) => project.id === selected)) selector.value = selected;
+
+  const merged = [
+    ...state.projects.map((project) => ({ kind: "project", time: project.updated_at || project.created_at || "", item: project })),
+    ...localRuns.slice(0, 20).map((run) => ({ kind: "run", time: run.created_at || "", item: run })),
+  ].sort((a, b) => String(b.time).localeCompare(String(a.time)));
+
   const container = element("recentProjects");
   container.replaceChildren();
-  if (!state.projects.length) {
+  if (!merged.length) {
     const empty = document.createElement("p");
     empty.className = "muted compact";
-    empty.textContent = "还没有项目。";
+    empty.textContent = "还没有项目或本机运行记录。";
     container.append(empty);
     return;
   }
-  for (const project of state.projects) {
+  for (const { kind, item } of merged.slice(0, 30)) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = `project-link${state.currentProject?.id === project.id ? " is-active" : ""}`;
     const title = document.createElement("strong");
-    title.textContent = project.title || project.idea;
     const meta = document.createElement("span");
-    meta.textContent = `${statusLabels[project.status] || project.status} · ${project.id}`;
+    if (kind === "project") {
+      button.className = `project-link${state.currentProject?.id === item.id ? " is-active" : ""}`;
+      title.textContent = item.title || item.idea;
+      meta.textContent = `${statusLabels[item.status] || item.status} · ${item.id}`;
+      button.addEventListener("click", () => openProject(item.id));
+    } else {
+      button.className = "project-link";
+      title.textContent = `本地运行_${item.note || item.id.slice(0, 10)}`;
+      meta.textContent = `本机运行 · ${item.status} · ${formatDate(item.created_at)}`;
+      button.addEventListener("click", () => {
+        state.selectedLocalRunId = item.id;
+        state.localRunLogSize = 0;
+        showView("runs");
+        refreshLocalRuns().catch((error) => toast(error.message, true));
+      });
+    }
     button.append(title, meta);
-    button.addEventListener("click", () => openProject(project.id));
     container.append(button);
   }
+}
+
+function stopExperimentPolling() {
+  window.clearTimeout(state.experimentPollTimer);
+  state.experimentPollTimer = null;
+}
+
+function selectedFolderEntries() {
+  return [...element("experimentFolder").files].map((file) => ({
+    file, path: (file.webkitRelativePath || "").split("/").slice(1).join("/"),
+  })).filter((entry) => entry.path && !entry.path.split("/").some((part) => part.startsWith(".")));
+}
+
+function folderCommand(main) {
+  return main ? `python ${JSON.stringify(main)}` : "";
+}
+
+function clearOptimization() {
+  state.optimizationProposalId = null;
+  element("experimentOptimizationPreview").hidden = true;
+  element("experimentOptimizationFeedback").textContent = "";
+}
+
+function renderOptimization(proposal) {
+  state.optimizationProposalId = proposal.id;
+  element("experimentOptimizationReason").textContent = proposal.reason;
+  element("experimentOptimizationDiff").textContent = proposal.diff;
+  element("experimentOptimizationCode").textContent = proposal.edits
+    .map((edit) => `# ${edit.path}\n${edit.code}`).join("\n\n");
+  element("experimentOptimizationPreview").hidden = false;
+  element("experimentOptimizationFeedback").textContent = "请检查候选代码及差异；运行不会覆盖原文件。";
+}
+
+function updateOptimizationMode() {
+  const enabled = element("experimentInputMode").value === "folder" && element("experimentOptimizeMode").checked;
+  element("experimentOptimizationControls").hidden = !enabled;
+  element("experimentBaselineFile").disabled = enabled;
+  element("experimentBaselineCommandRow").hidden = enabled || !element("experimentBaselineFile").value;
+  if (enabled) {
+    element("experimentBaselineFile").value = "";
+    element("experimentBaselineCommand").value = "";
+  } else clearOptimization();
+}
+
+function renderFolderChoices(paths) {
+  const scripts = paths.filter((path) => path.endsWith(".py")).sort();
+  const data = paths.filter((path) => !path.endsWith(".py")).sort();
+  const allowed = element("experimentAlgorithmFiles");
+  const hadOptions = allowed.options.length > 0;
+  const previousAllowed = new Set([...allowed.selectedOptions].map((item) => item.value));
+  allowed.replaceChildren();
+  for (const path of scripts) {
+    const option = new Option(path, path);
+    option.selected = hadOptions ? previousAllowed.has(path) : true;
+    allowed.add(option);
+  }
+  for (const [id, items, empty] of [
+    ["experimentMainFile", scripts, "选择 Python 主文件"],
+    ["experimentBaselineFile", scripts, "不使用基线文件"],
+    ["experimentDataFile", data, "脚本自行读取目录内文件"],
+  ]) {
+    const select = element(id);
+    const previous = select.value;
+    select.replaceChildren(new Option(empty, ""));
+    for (const path of items) select.add(new Option(path, path));
+    if (items.includes(previous)) select.value = previous;
+    else if (id === "experimentMainFile" && scripts.length === 1) select.value = scripts[0];
+  }
+  if (!element("experimentCommand").value && element("experimentMainFile").value) {
+    element("experimentCommand").value = folderCommand(element("experimentMainFile").value);
+  }
+  element("experimentBaselineCommandRow").hidden = !element("experimentBaselineFile").value;
+  if (element("experimentBaselineFile").value && !element("experimentBaselineCommand").value) {
+    element("experimentBaselineCommand").value = folderCommand(element("experimentBaselineFile").value);
+  }
+}
+
+function updateExperimentInputMode() {
+  const folderMode = element("experimentInputMode").value === "folder";
+  element("experimentFolderInputs").hidden = !folderMode;
+  element("experimentSingleInputs").hidden = folderMode;
+  if (!folderMode) element("experimentOptimizeMode").checked = false;
+  updateOptimizationMode();
+}
+
+async function uploadFolderIfNeeded(projectId) {
+  const input = element("experimentFolder");
+  if (!input.files.length) {
+    if (state.uploadedFolderId) return state.uploadedFolderId;
+    const data = await api(`/api/projects/${projectId}/experiments`);
+    if (!data.folder) throw new Error("请先选择项目文件夹。 ");
+    state.uploadedFolderId = data.folder.id;
+    renderFolderChoices(Object.keys(data.folder.files));
+    return state.uploadedFolderId;
+  }
+  if (state.uploadedFolderProjectId === projectId) return state.uploadedFolderId;
+  const entries = selectedFolderEntries();
+  if (entries.length !== input.files.length) {
+    element("experimentCommandFeedback").textContent = "已忽略隐藏文件；请确认目录中不包含密钥。";
+  }
+  if (!entries.length || entries.reduce((total, { file }) => total + file.size, 0) > 2 * 1024 * 1024 * 1024) {
+    throw new Error("目录须至少包含一个普通文件，总量不超过 2 GiB。");
+  }
+  const body = new FormData();
+  for (const { file, path } of entries) {
+    body.append("paths", path);
+    body.append("files", file, file.name);
+  }
+  const uploaded = await api(`/api/projects/${projectId}/experiments/folder`, { method: "POST", body });
+  state.uploadedFolderProjectId = projectId;
+  state.uploadedFolderId = uploaded.id;
+  return uploaded.id;
+}
+
+async function suggestExperimentCommand() {
+  const projectId = element("experimentProject").value;
+  const main = element("experimentMainFile").value;
+  if (!projectId || !main) return toast("请先选择项目文件夹和主文件。", true);
+  const button = element("suggestExperimentCommand");
+  setBusy(button, true, "正在分析…");
+  try {
+    const folderId = await uploadFolderIfNeeded(projectId);
+    const suggestion = await api(`/api/projects/${projectId}/experiments/suggest-command`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        folder_id: folderId,
+        main_file: main,
+        reference_command: element("experimentReferenceCommand").value.trim(),
+        allow_model: element("experimentShareCode").checked,
+      }),
+    });
+    element("experimentCommand").value = suggestion.command;
+    element("experimentCommandFeedback").textContent = suggestion.source === "model"
+      ? "模型建议已填入，请检查后再运行。" : "已填入默认命令；未向模型发送代码。";
+    await refreshExperiments();
+  } catch (error) { toast(error.message, true); }
+  finally { setBusy(button, false, ""); }
+}
+
+async function generateOptimization() {
+  const projectId = element("experimentProject").value;
+  const main = element("experimentMainFile").value;
+  const goal = element("experimentOptimizationGoal").value.trim();
+  const filesToConsider = [...element("experimentAlgorithmFiles").selectedOptions].map((item) => item.value);
+  if (!projectId || !main || goal.length < 4) return toast("请选择主文件并写明改进目标。", true);
+  if (!filesToConsider.length) return toast("请选择至少一个可能包含算法的 Python 文件。", true);
+  if (!element("experimentShareCode").checked) return toast("请先确认允许向已配置模型发送主文件。", true);
+  const button = element("generateOptimization");
+  setBusy(button, true, "正在生成…");
+  try {
+    const folderId = await uploadFolderIfNeeded(projectId);
+    const proposal = await api(`/api/projects/${projectId}/experiments/optimize`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ folder_id: folderId, main_file: main,
+        files_to_consider: filesToConsider, goal, allow_model: true }),
+    });
+    const currentFiles = [...element("experimentAlgorithmFiles").selectedOptions].map((item) => item.value);
+    if (element("experimentProject").value !== projectId || element("experimentMainFile").value !== main
+        || element("experimentOptimizationGoal").value.trim() !== goal
+        || state.uploadedFolderId !== folderId || JSON.stringify(currentFiles) !== JSON.stringify(filesToConsider)) {
+      clearOptimization();
+      return toast("项目或候选文件已变化，请重新生成改进方案。", true);
+    }
+    renderOptimization(proposal);
+  } catch (error) { clearOptimization(); toast(error.message, true); }
+  finally { setBusy(button, false, ""); }
+}
+
+async function refreshExperiments() {
+  const requestId = ++state.experimentRequestId;
+  const projectId = element("experimentProject").value;
+  const container = element("experimentRecords");
+  if (!projectId) {
+    container.textContent = "请先选择一个研究项目。";
+    stopExperimentPolling();
+    return;
+  }
+  const data = await api(`/api/projects/${projectId}/experiments`);
+  if (requestId !== state.experimentRequestId || element("experimentProject").value !== projectId) return;
+  if (!element("experimentFolder").files.length && data.folder) {
+    if (state.uploadedFolderId && state.uploadedFolderId !== data.folder.id) {
+      element("experimentCommandFeedback").textContent = "项目文件夹已被更新，请刷新页面并重新确认主文件与命令。";
+    } else {
+      state.uploadedFolderId = data.folder.id;
+      renderFolderChoices(Object.keys(data.folder.files));
+    }
+  }
+  container.replaceChildren();
+  const inputs = document.createElement("p");
+  inputs.className = "form-feedback";
+  inputs.textContent = `已上传：${data.folder ? `项目文件夹 ${Object.keys(data.folder.files).length} 个文件` : Object.keys(data.inputs).join("、") || "暂无"}。旧运行保留独立快照。`;
+  container.append(inputs);
+  for (const run of data.runs) {
+    const card = document.createElement("article");
+    card.className = "experiment-run";
+    const title = document.createElement("h5");
+    title.textContent = `${run.id.slice(0, 10)} · ${run.status} · ${run.protocol.metric}（${run.protocol.direction}）`;
+    card.append(title);
+    const detail = document.createElement("p");
+    detail.textContent = `假设：${run.protocol.hypothesis}；实验方案差异：${run.protocol.intervention}。已记录 ${run.trials.length} 次原始试验。`;
+    card.append(detail);
+    if (run.optimized) {
+      const note = document.createElement("p");
+      note.textContent = `算法优化对照：修改了 ${run.optimized.edits.length} 个 Python 文件；原版和候选版使用相同命令、参数与种子。`;
+      card.append(note);
+    }
+    const provenance = document.createElement("p");
+    provenance.textContent = run.protocol.mode === "folder"
+      ? `项目文件 ${Object.keys(run.inputs).length} 个，输入哈希已存入运行记录。`
+      : `数据 / 基线 / 候选 SHA-256：${Object.values(run.inputs).map((hash) => hash.slice(0, 12)).join(" · ")}`;
+    card.append(provenance);
+    if (run.summary?.length) {
+      const list = document.createElement("ul");
+      for (const group of run.summary) {
+        const item = document.createElement("li");
+        item.textContent = `${group.role} ${JSON.stringify(group.parameters)} · 均值 ${group.mean} · 成功 ${group.count} 次`;
+        list.append(item);
+      }
+      card.append(list);
+    }
+    if (run.comparison) {
+      const comparison = document.createElement("p");
+      comparison.textContent = run.comparison.baseline_mean === null
+        ? `当前候选中最优参数 ${JSON.stringify(run.comparison.parameters)}：均值 ${run.comparison.candidate_mean}。${run.comparison.note}`
+        : `当前候选中最优参数 ${JSON.stringify(run.comparison.parameters)}：基线均值 ${run.comparison.baseline_mean}，候选均值 ${run.comparison.candidate_mean}，差值 ${run.comparison.difference}。${run.comparison.note}`;
+      card.append(comparison);
+    }
+    const failures = run.trials.filter((trial) => trial.status !== "completed");
+    if (failures.length || run.error || run.warning) {
+      const warning = document.createElement("p");
+      warning.textContent = `失败 ${failures.length} 次；${run.error || failures.map((trial) => trial.error).join("；")} ${run.warning || ""}`;
+      card.append(warning);
+    }
+    const raw = document.createElement("details");
+    const caption = document.createElement("summary");
+    caption.textContent = "查看逐次试验原始记录";
+    const content = document.createElement("pre");
+    content.textContent = JSON.stringify(run.trials, null, 2);
+    raw.append(caption, content);
+    card.append(raw);
+    if (run.status === "completed" && !data.adopted) {
+      const adopt = document.createElement("button");
+      adopt.className = "secondary-button";
+      adopt.type = "button";
+      adopt.textContent = "研究者确认并导入结果";
+      adopt.addEventListener("click", async () => {
+        if (!window.confirm("确认将这份完整实验报告作为该项目的真实结果资料？每个项目首版只能导入一份实验报告。")) return;
+        try {
+          await api(`/api/projects/${projectId}/experiments/runs/${run.id}/adopt`, { method: "POST" });
+          toast("结果已导入。原有稿件将标记为待更新，请在项目页检查并重跑相关阶段。");
+          await refreshExperiments();
+        } catch (error) { toast(error.message, true); }
+      });
+      card.append(adopt);
+    }
+    container.append(card);
+  }
+  if (!data.runs.length) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "尚无运行记录；请按上方协议提供材料后启动。";
+    container.append(empty);
+  }
+  stopExperimentPolling();
+  if (data.active?.status === "running") {
+    state.experimentPollTimer = window.setTimeout(() => refreshExperiments().catch((error) => {
+      stopExperimentPolling();
+      toast(error.message, true);
+    }), 2000);
+  }
+}
+
+async function runExperiment(event) {
+  event.preventDefault();
+  const button = element("runExperiment");
+  const projectId = element("experimentProject").value;
+  if (!projectId) return toast("请先选择研究项目。", true);
+  const folderMode = element("experimentInputMode").value === "folder";
+  const main = element("experimentMainFile").value;
+  const command = element("experimentCommand").value.trim();
+  const optimizing = folderMode && element("experimentOptimizeMode").checked;
+  if (folderMode && (!main || !command)) return toast("请选择主文件并确认运行命令。", true);
+  if (optimizing && !state.optimizationProposalId) return toast("请先生成并审阅候选代码。", true);
+  if (folderMode && !window.confirm(`确认在隔离容器中${optimizing ? "对照运行原版和改进版" : "执行"}以下命令？\n\n${command}`)) return;
+  let variants;
+  try { variants = JSON.parse(element("experimentVariants").value); }
+  catch { return toast("参数候选必须是 JSON 数组。", true); }
+  const seedParts = element("experimentSeeds").value.split(",").map((part) => part.trim());
+  if (seedParts.some((part) => !/^\d+$/.test(part))) return toast("随机种子只能是逗号分隔的非负整数。", true);
+  const protocol = {
+    hypothesis: element("experimentHypothesis").value.trim(),
+    intervention: element("experimentIntervention").value.trim(),
+    metric: element("experimentMetric").value.trim(),
+    direction: element("experimentDirection").value,
+    seeds: seedParts.map(Number),
+    variants,
+    timeout_seconds: Number(element("experimentTimeout").value),
+    acknowledge_code_risk: element("experimentConsent").checked,
+    mode: folderMode ? "folder" : "single",
+    main_file: folderMode ? main : null,
+    baseline_file: folderMode && !optimizing ? element("experimentBaselineFile").value || null : null,
+    baseline_command: folderMode && !optimizing ? element("experimentBaselineCommand").value.trim() || null : null,
+    dataset_file: folderMode ? element("experimentDataFile").value || null : null,
+    command: folderMode ? command : null,
+    optimization_proposal_id: optimizing ? state.optimizationProposalId : null,
+  };
+  setBusy(button, true, "正在准备实验…");
+  try {
+    if (folderMode) protocol.folder_id = await uploadFolderIfNeeded(projectId);
+    else {
+      for (const [role, id] of [["dataset", "experimentDataset"], ["baseline", "experimentBaseline"], ["candidate", "experimentCandidate"]]) {
+        const file = element(id).files[0];
+        if (!file) continue;
+        const body = new FormData();
+        body.append("file", file);
+        await api(`/api/projects/${projectId}/experiments/inputs/${role}`, { method: "POST", body });
+      }
+    }
+    const result = await api(`/api/projects/${projectId}/experiments/runs`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(protocol),
+    });
+    element("experimentFeedback").textContent = `已开始运行 ${result.run_id.slice(0, 10)}，请在下方检查记录。`;
+    await refreshExperiments();
+  } catch (error) {
+    element("experimentFeedback").textContent = error.message;
+    toast(error.message, true);
+  } finally { setBusy(button, false, ""); }
 }
 
 async function uploadFiles(projectId, files, role) {
@@ -290,12 +675,15 @@ async function createProject(event) {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         idea,
+        source_run_id: state.pendingLocalRunId,
         sources: selectedSources("createSources"),
         run_now: false,
         guided: document.querySelector('input[name="executionMode"]:checked')?.value !== "automatic",
         configuration: collectConfiguration(),
       }),
     });
+    state.pendingLocalRunId = null;
+    element("sourceRunBanner").hidden = true;
     state.currentProject = project;
     state.historyProject = null;
     state.historyRevision = null;
@@ -504,6 +892,7 @@ function renderProject(project) {
   renderReview(project);
   renderWorkspaceV2(project, isActive || isInterrupted || isHistory);
   renderWorkspaceStage(project, isActive || isInterrupted || isHistory);
+  renderManuscriptSections(project);
 }
 
 function renderWorkspaceStage(project, isActive) {
@@ -850,26 +1239,89 @@ function renderEvidenceSummary(project) {
   }
 }
 
-function mermaidLabel(value, fallback) {
+function mermaidLabel(value, fallback, limit = 56) {
   const label = String(value || fallback)
     .replace(/["`\n\r;]/g, " ")
     .replace(/[\[\](){}`<>|#]/g, " ")
     .replace(/(?:-->|---|-.->|==>)/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-  return (label || fallback).slice(0, 56);
+  return (label || fallback).slice(0, limit);
 }
 
-function figureMermaid(entry) {
-  const title = mermaidLabel(entry.title, "研究流程");
-  const question = mermaidLabel(entry.composition?.[0], "研究问题与边界");
+function figureMermaid(entry, design = {}) {
+  const composition = Array.isArray(entry.composition) ? entry.composition : [];
+  const findComposition = (prefix, fallback) => {
+    const value = composition.find((item) => String(item).startsWith(prefix));
+    return mermaidLabel(value ? String(value).slice(prefix.length) : fallback, fallback, 34);
+  };
+  const question = findComposition("研究问题：", "研究问题与边界");
+  const hypothesis = findComposition("假设节点：", "待检验假设");
   if (entry.kind === "mechanism") {
-    return `flowchart LR\n  A["输入与证据"] --> B["处理模块"]\n  B --> C["输出与指标"]\n  C -.-> D["验证反馈"]\n  D -.-> B\n  T["${title}"]:::title -.-> A\n  classDef title fill:#edf5f0,stroke:#2f6550,color:#183b31;`;
+    const architecture = entry.architecture || {
+      inputs: design.datasets?.length ? design.datasets : design.independent_variables,
+      constraints: design.independent_variables,
+      method: design.proposed_method,
+      comparisons: design.baselines,
+      outputs: design.metrics?.length ? design.metrics : design.dependent_variables,
+      validation: design.falsification,
+    };
+    const input = mermaidLabel(architecture.inputs?.[0] || entry.data_requirements, "研究材料 / 数据", 30);
+    const constraint = mermaidLabel(architecture.constraints?.[0], "纳入规则与预算", 30);
+    const method = mermaidLabel(architecture.method || entry.job, "研究方法", 32);
+    const comparison = mermaidLabel(architecture.comparisons?.[0], "对照条件", 30);
+    const output = mermaidLabel(architecture.outputs?.[0], "主要结局指标", 30);
+    const validation = mermaidLabel(architecture.validation || entry.boundary, "预注册失败条件", 34);
+    return `flowchart LR
+  subgraph IN["输入与约束"]
+    I1["${input}"]
+    I2["${constraint}"]
+  end
+  subgraph CORE["方法与比较"]
+    M["${method}"]
+    B["${comparison}"]
+  end
+  subgraph OUT["评价"]
+    O["${output}"]
+    V["${validation}"]
+  end
+  I1 --> M
+  I2 --> M
+  M --> O
+  B --> O
+  O -.-> V
+  V -. 修订方案 .-> M
+  classDef input fill:#f7f8fa,stroke:#7a8792,color:#26333d,stroke-width:1px;
+  classDef method fill:#e8eff3,stroke:#587080,color:#1f3440,stroke-width:1px;
+  classDef output fill:#f3f5f6,stroke:#687781,color:#27343c,stroke-width:1px;
+  classDef pending fill:#ffffff,stroke:#8a969f,color:#4b5962,stroke-width:1px,stroke-dasharray:4 3;
+  class I1,I2 input;
+  class M,B method;
+  class O output;
+  class V pending;`;
   }
   if (entry.kind === "results") {
-    return `flowchart LR\n  A["真实结果"] --> B["主要指标"]\n  B --> C["对照与区间"]\n  C --> D["稳健性检查"]\n  Q["${title}"]:::title -.-> A\n  classDef title fill:#f2e3d1,stroke:#b86a2f,color:#6c3e20;`;
+    const baseline = findComposition("对照：", "对照条件");
+    const result = entry.status === "waiting_for_results" ? "结果材料待确认" : "已核验结果";
+    return `flowchart LR
+  R["${result}"] --> M["主要指标与区间"]
+  B["${baseline}"] --> C["同预算比较"]
+  M --> C
+  C --> S["稳健性与失败案例"]
+  classDef neutral fill:#f7f8fa,stroke:#77838c,color:#26333d,stroke-width:1px;
+  class R,M,B,C,S neutral;`;
   }
-  return `flowchart LR\n  A["${question}"] --> B["证据与纳入边界"]\n  B --> C["研究方法"]\n  C --> D["可证伪结论"]\n  D -.-> E["失败条件 / 待验证"]\n  T["${title}"]:::title -.-> A\n  classDef title fill:#edf5f0,stroke:#2f6550,color:#183b31;`;
+  return `flowchart LR
+  Q["${question}"] --> E["证据与纳入规则"]
+  H["${hypothesis}"] -.-> D["研究设计"]
+  E --> D
+  D --> A["分析与对照"]
+  A --> O["结论边界"]
+  O -.-> F["失败条件"]
+  classDef neutral fill:#f7f8fa,stroke:#77838c,color:#26333d,stroke-width:1px;
+  classDef pending fill:#ffffff,stroke:#8a969f,color:#4b5962,stroke-width:1px,stroke-dasharray:4 3;
+  class Q,E,D,A,O neutral;
+  class H,F pending;`;
 }
 
 function renderMermaidPreview(container, source) {
@@ -887,12 +1339,16 @@ function renderMermaidPreview(container, source) {
       securityLevel: "strict",
       theme: "base",
       themeVariables: {
-        fontFamily: "ui-sans-serif, system-ui, sans-serif",
-        primaryColor: "#edf5f0",
-        primaryTextColor: "#183b31",
-        primaryBorderColor: "#6d9b84",
-        lineColor: "#6c8177",
+        fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif",
+        fontSize: "13px",
+        primaryColor: "#f7f8fa",
+        primaryTextColor: "#26333d",
+        primaryBorderColor: "#77838c",
+        lineColor: "#65737d",
+        clusterBkg: "#ffffff",
+        clusterBorder: "#c8d0d5",
       },
+      flowchart: { curve: "linear", nodeSpacing: 34, rankSpacing: 48, padding: 12 },
     });
     state.mermaidInitialized = true;
   }
@@ -985,7 +1441,7 @@ function renderFigureStory(project) {
       card.append(top, job);
       if (prefix === "图") {
         const diagram = document.createElement("div");
-        renderMermaidPreview(diagram, figureMermaid(entry));
+        renderMermaidPreview(diagram, figureMermaid(entry, state.currentProject?.state?.design || {}));
         card.append(diagram);
       } else {
         card.append(buildTablePreview(entry));
@@ -1676,6 +2132,604 @@ function safeExternalUrl(value) {
   }
 }
 
+function stopLocalRunPolling() {
+  window.clearTimeout(state.runPollTimer);
+  state.runPollTimer = null;
+}
+
+function localRunEntries() {
+  return [...element("localRunFiles").files].map((file) => ({
+    file, path: (file.webkitRelativePath || file.name || "").split("/").slice(1).join("/"),
+  })).filter((entry) => entry.path && !entry.path.split("/").some((part) => part.startsWith(".")));
+}
+
+function parseMetricColumns(raw) {
+  return raw.split(",").map((part) => part.trim()).filter(Boolean);
+}
+
+function bindLocalDraft(run) {
+  state.localRunDraftId = run.id;
+  element("startLocalRun").disabled = false;
+  element("deleteLocalRunDraft").hidden = false;
+  if (run.command) element("localRunCommand").value = run.command;
+  if (run.csv_path) element("localRunCsvPath").value = run.csv_path;
+  if (run.metric_columns && run.metric_columns.length) element("localRunColumns").value = run.metric_columns.join(", ");
+}
+
+function clearLocalDraft(resetFiles) {
+  state.localRunDraftId = null;
+  element("startLocalRun").disabled = true;
+  element("deleteLocalRunDraft").hidden = true;
+  if (resetFiles) {
+    element("localRunFiles").value = "";
+    element("clearLocalRunFiles").hidden = true;
+  }
+}
+
+async function createLocalRun(event) {
+  event.preventDefault();
+  const button = element("createLocalRun");
+  if (!element("localRunFiles").files.length) return toast("请先选择代码目录。", true);
+  const entries = localRunEntries();
+  if (!entries.length || entries.reduce((total, { file }) => total + file.size, 0) > 2 * 1024 * 1024 * 1024)
+    return toast("目录须至少包含一个普通文件，总量不超过 2 GiB。", true);
+  const body = new FormData();
+  body.append("note", element("localRunNote").value.trim());
+  for (const { file, path } of entries) {
+    body.append("paths", path);
+    body.append("files", file, file.name);
+  }
+  setBusy(button, true, "正在上传…");
+  element("localRunFeedback").textContent = "";
+  try {
+    const run = await api("/api/runs", { method: "POST", body });
+    bindLocalDraft(run);
+    state.selectedLocalRunId = run.id;
+    state.localRunLogSize = 0;
+    element("localRunFiles").value = "";
+    element("clearLocalRunFiles").hidden = true;
+    element("localRunFeedback").textContent = `已建立运行记录 ${run.id.slice(0, 10)}，确认配置后即可启动。`;
+    await refreshLocalRuns();
+    loadProjects().catch(() => {});
+  } catch (error) {
+    element("localRunFeedback").textContent = error.message;
+    toast(error.message, true);
+  } finally { setBusy(button, false, ""); }
+}
+
+async function suggestLocalRun(useModel) {
+  const runId = state.localRunDraftId;
+  if (!runId) return toast("请先上传代码目录。", true);
+  const button = element("suggestLocalRun");
+  setBusy(button, true, "正在识别…");
+  element("localRunSuggestFeedback").textContent = "";
+  try {
+    const response = await api(`/api/runs/${runId}/suggest`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        reference_command: element("localRunReference").value.trim(),
+        allow_model: Boolean(useModel),
+      }),
+    });
+    if (response.command) element("localRunCommand").value = response.command;
+    element("localRunCsvPath").value = response.csv_path || "";
+    element("localRunColumns").value = (response.metric_columns || []).join(", ");
+    element("localRunSuggestFeedback").textContent = response.source === "model"
+      ? "已按 LLM 建议填入，请检查后再启动。" : "已按目录自动识别，可手动修改。";
+  } catch (error) {
+    element("localRunSuggestFeedback").textContent = error.message;
+    toast(error.message, true);
+  } finally { setBusy(button, false, ""); }
+}
+
+async function startLocalRun() {
+  const runId = state.localRunDraftId;
+  if (!runId) return toast("请先上传代码目录。", true);
+  if (!element("localRunConsent").checked) return toast("请先确认宿主机执行风险。", true);
+  const command = element("localRunCommand").value.trim();
+  if (!command) return toast("请填写执行命令。", true);
+  const button = element("startLocalRun");
+  setBusy(button, true, "正在启动…");
+  let started = false;
+  try {
+    await api(`/api/runs/${runId}/start`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        command,
+        csv_path: element("localRunCsvPath").value.trim(),
+        metric_columns: parseMetricColumns(element("localRunColumns").value),
+        acknowledge_risk: element("localRunConsent").checked,
+      }),
+    });
+    started = true;
+    state.selectedLocalRunId = runId;
+    state.localRunLogSize = 0;
+    element("localRunFeedback").textContent = `已启动运行 ${runId.slice(0, 10)}。`;
+    await refreshLocalRuns();
+  } catch (error) {
+    element("localRunFeedback").textContent = error.message;
+    toast(error.message, true);
+  } finally {
+    setBusy(button, false, "");
+    if (started) clearLocalDraft(false);
+  }
+}
+
+function renderLocalRunTree(runId, files) {
+  const area = element("localRunTree");
+  const preview = element("localRunPreview");
+  area.dataset.runId = runId;
+  area.replaceChildren();
+  preview.hidden = true;
+  preview.replaceChildren();
+  const root = { folders: new Map(), files: [] };
+  for (const path of files) {
+    const parts = path.split("/");
+    let node = root;
+    for (const folder of parts.slice(0, -1)) {
+      if (!node.folders.has(folder)) node.folders.set(folder, { folders: new Map(), files: [] });
+      node = node.folders.get(folder);
+    }
+    node.files.push({ name: parts.at(-1), path });
+  }
+  function appendFiles(node, target) {
+    for (const [name, child] of [...node.folders].sort(([a], [b]) => a.localeCompare(b))) {
+      const folder = document.createElement("details");
+      folder.open = true;
+      const summary = document.createElement("summary");
+      summary.textContent = `▸ ${name}`;
+      folder.append(summary);
+      appendFiles(child, folder);
+      target.append(folder);
+    }
+    for (const file of node.files.sort((a, b) => a.name.localeCompare(b.name))) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = `◦ ${file.name}`;
+      button.title = file.path;
+      button.addEventListener("click", async () => {
+        area.querySelectorAll("button").forEach((item) => item.classList.remove("is-active"));
+        button.classList.add("is-active");
+        preview.hidden = false;
+        preview.textContent = "正在读取文件…";
+        try {
+          const result = await api(`/api/runs/${runId}/files?path=${encodeURIComponent(file.path)}`);
+          if (state.selectedLocalRunId !== runId || !button.classList.contains("is-active")) return;
+          const heading = document.createElement("strong");
+          heading.textContent = result.path;
+          const source = document.createElement("pre");
+          source.textContent = result.content;
+          preview.replaceChildren(heading, source);
+        } catch (error) {
+          if (state.selectedLocalRunId === runId && button.classList.contains("is-active")) preview.textContent = error.message;
+        }
+      });
+      target.append(button);
+    }
+  }
+  appendFiles(root, area);
+  if (!files.length) area.textContent = "该记录没有可显示的代码文件。";
+}
+
+async function refreshLocalRuns() {
+  const requestId = ++state.runRequestId;
+  const runs = await api("/api/runs");
+  if (requestId !== state.runRequestId) return;
+  const container = element("localRunList");
+  container.replaceChildren();
+  if (!runs.length) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "还没有本机运行记录。";
+    container.append(empty);
+  }
+  for (const run of runs) {
+    const card = document.createElement("article");
+    card.className = "experiment-run";
+    const heading = document.createElement("h5");
+    heading.textContent = `${run.note || run.id.slice(0, 10)} · ${run.status} · ${formatDate(run.created_at)}`;
+    card.append(heading);
+    const line = document.createElement("p");
+    line.textContent = run.command
+      ? `${run.command}${run.exit_code === null || run.exit_code === undefined ? "" : ` · 退出码 ${run.exit_code}`}`
+      : "尚未配置运行命令";
+    card.append(line);
+    const actions = document.createElement("div");
+    actions.className = "run-actions";
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "secondary-button";
+    open.textContent = { created: "配置并启动", failed: "查看 / 重试" }[run.status] || "查看监控";
+    open.addEventListener("click", () => {
+      state.selectedLocalRunId = run.id;
+      state.localRunLogSize = 0;
+      if (run.status === "created" || run.status === "failed") bindLocalDraft(run);
+      refreshLocalRuns().catch(() => {});
+    });
+    actions.append(open);
+    if (run.status === "running") {
+      const stop = document.createElement("button");
+      stop.type = "button";
+      stop.className = "danger-button";
+      stop.textContent = "停止";
+      stop.addEventListener("click", async () => {
+        try { await api(`/api/runs/${run.id}/stop`, { method: "POST" }); }
+        catch (error) { toast(error.message, true); }
+        refreshLocalRuns().catch(() => {});
+      });
+      actions.append(stop);
+    }
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "danger-button";
+    remove.textContent = "删除";
+    remove.addEventListener("click", async () => {
+      const label = run.note ? `（${run.note}）` : "";
+      const linked = run.project_id ? `此记录已关联项目 ${run.project_id}，删除后项目仍保留研究说明，但无法从项目回看本次上传的原始代码。` : "";
+      if (!window.confirm(`删除该运行记录${label}？代码目录与日志将一并删除。${linked}`)) return;
+      try { await api(`/api/runs/${run.id}`, { method: "DELETE" }); }
+      catch (error) { toast(error.message, true); return; }
+      if (state.selectedLocalRunId === run.id) {
+        state.selectedLocalRunId = null;
+        state.localRunLogSize = 0;
+      }
+      if (state.localRunDraftId === run.id) clearLocalDraft(true);
+      refreshLocalRuns().catch(() => {});
+      loadProjects().catch(() => {});
+    });
+    actions.append(remove);
+    card.append(actions);
+    container.append(card);
+  }
+  if (!runs.some((run) => run.id === state.selectedLocalRunId)) {
+    state.selectedLocalRunId = runs[0]?.id || null;
+    state.localRunLogSize = 0;
+  }
+  await refreshLocalRunDetail();
+  if (requestId !== state.runRequestId || !element("runsView").classList.contains("is-active")) return;
+  stopLocalRunPolling();
+  if (runs.some((run) => run.status === "running")) {
+    state.runPollTimer = window.setTimeout(() => refreshLocalRuns().catch(() => {}), 2000);
+  }
+}
+
+async function refreshLocalRunDetail() {
+  const requestId = ++state.runDetailRequestId;
+  const detail = element("localRunDetail");
+  const runId = state.selectedLocalRunId;
+  if (!runId) {
+    detail.hidden = true;
+    element("localRunPaper").hidden = true;
+    state.localPaperRunId = null;
+    element("localRunTree").textContent = "上传目录后，这里会显示文件树。";
+    element("localRunTree").dataset.runId = "";
+    element("localRunPreview").hidden = true;
+    return;
+  }
+  let run;
+  const after = state.localRunLogSize;
+  try { run = await api(`/api/runs/${runId}?after_bytes=${after}&tail_bytes=20000`); }
+  catch (error) { detail.hidden = true; return; }
+  if (requestId !== state.runDetailRequestId || state.selectedLocalRunId !== runId) return;
+  if (element("localRunTree").dataset.runId !== runId) renderLocalRunTree(runId, run.files || []);
+  if (state.localPaperRunId !== runId) {
+    state.localPaperRunId = runId;
+    loadLocalPaper(runId).catch(() => {});
+  }
+  element("localPaperOpenProject").hidden = !run.project_id;
+  element("localPaperOpenProject").dataset.projectId = run.project_id || "";
+  detail.hidden = false;
+  if (detail.dataset.runId !== runId) {
+    detail.replaceChildren();
+    detail.dataset.runId = runId;
+  }
+  let heading = detail.querySelector("h4");
+  if (!heading) {
+    heading = document.createElement("h4");
+    detail.append(heading);
+  }
+  heading.textContent = `运行：${run.note || run.id.slice(0, 10)}（${run.status}）`;
+  let hint = detail.querySelector(".local-run-hint");
+  if (!hint) {
+    hint = document.createElement("p");
+    hint.className = "muted local-run-hint";
+    detail.append(hint);
+  }
+  hint.textContent = {
+    created: "请检查执行命令、指标文件和宿主机风险确认，然后点击上方的开始运行。",
+    running: "正在本机运行；下方持续更新终端输出及指标。需要中止请点击记录中的“停止”。",
+    completed: "运行已结束；请核对指标与终端输出，再判断结果是否可用。",
+    failed: `运行未成功${run.error ? `：${run.error}` : "；请检查命令与终端输出，可在记录中选择重试"}。`,
+  }[run.status] || "请查看本次运行的指标和日志。";
+
+  let tableArea = detail.querySelector(".run-metrics-area");
+  if (!tableArea) {
+    tableArea = document.createElement("div");
+    tableArea.className = "run-metrics-area";
+    detail.append(tableArea);
+  }
+  tableArea.replaceChildren();
+  if (run.metrics && run.metrics.available && (run.metrics.summary || []).length) {
+    const table = document.createElement("table");
+    table.className = "metrics-table";
+    const head = document.createElement("thead");
+    const headerRow = document.createElement("tr");
+    for (const label of ["指标", "样本数", "均值", "最小值", "最大值", "最新值"]) {
+      const th = document.createElement("th"); th.textContent = label; headerRow.append(th);
+    }
+    head.append(headerRow);
+    table.append(head);
+    const body = document.createElement("tbody");
+    for (const item of run.metrics.summary) {
+      const row = document.createElement("tr");
+      for (const value of [item.column, item.count, roundMetric(item.mean), roundMetric(item.min), roundMetric(item.max), roundMetric(item.last)]) {
+        const td = document.createElement("td"); td.textContent = String(value); row.append(td);
+      }
+      body.append(row);
+    }
+    table.append(body);
+    tableArea.append(table);
+  } else {
+    const note = document.createElement("p");
+    note.className = "muted";
+    note.textContent = run.metrics?.error || (run.metrics?.available
+      ? "指标文件中还没有可统计的数值列。" : `尚未找到指标文件：${run.csv_path || "未配置"}`);
+    tableArea.append(note);
+  }
+
+  let caption = detail.querySelector(".console-caption");
+  if (!caption) {
+    caption = document.createElement("p");
+    caption.className = "muted console-caption";
+    caption.textContent = "终端输出（stdout + stderr）：";
+    detail.append(caption);
+  }
+  let pre = detail.querySelector(".console-log");
+  if (!pre) {
+    pre = document.createElement("pre");
+    pre.className = "console-log";
+    detail.append(pre);
+  }
+  if (after === 0) {
+    pre.textContent = run.output || "";
+    pre.scrollTop = pre.scrollHeight;
+  } else if (run.output) {
+    pre.textContent += run.output;
+    pre.scrollTop = pre.scrollHeight;
+  }
+  state.localRunLogSize = run.log_size || after;
+}
+
+function fillLocalPaperPlan(plan) {
+  if (!plan) {
+    element("localPaperPlan").hidden = true;
+    element("localPaperTransfer").disabled = true;
+    element("localResearchIdea").value = "";
+    element("localPaperReportDetails").hidden = true;
+    return;
+  }
+  element("localResearchIdea").value = plan.research_idea || [
+    `研究主题：${plan.title || "待确认"}`,
+    `研究问题：${plan.direction || "待确认"}`,
+    `技术方案：${plan.method || "待确认"}`,
+    `数据与对照：${(plan.datasets || []).join("、")}；${(plan.baselines || []).join("、")}`,
+    `指标与边界：${(plan.metrics || []).join("、")}；${(plan.limitations || []).join("、")}`,
+  ].join("\n\n");
+  element("localPaperPlan").hidden = false;
+  element("localPaperTransfer").disabled = !plan.code_digest;
+  const reports = element("localPaperReportDetails");
+  reports.hidden = !plan.module_reports?.length;
+  if (!reports.hidden) element("localPaperReportPre").textContent = plan.module_reports
+    .map((item) => `第 ${item.chunk} 组代码${item.verified === false ? "（缺少可核对行号，待核实）" : ""}：\n${item.text}`).join("\n\n");
+  const coverage = `已读取 ${plan.read_files?.[0] || "README.md"}${plan.source_bytes ? `（${Math.round(plan.source_bytes / 1024)} KiB）` : ""}${plan.ignored_data_files ? `；目录中另有 ${plan.ignored_data_files} 个文件未读取` : ""}。`;
+  const fallbackNote = plan.idea_source === "model_text_fallback"
+    ? "结构化字段输出未成功，已保留模型生成的详细研究正文；标题、数据集、基线和指标字段仍需你确认。"
+    : plan.idea_source === "module_reports_fallback"
+      ? "模型最终综合未成功，已从 README 分析报告中本地整理研究说明；请重点检查技术路径并修改标题、数据集、基线和指标。"
+    : "";
+  element("localPaperFeedback").textContent = !plan.code_digest
+    ? "这是旧版分析结果；请点击上方按钮重新按 README.md 分析后再带入项目。"
+    : coverage + (plan.unanchored_chunks?.length ? `其中 ${plan.unanchored_chunks.length} 组缺少可核对行号，请重点核实。` : "") + fallbackNote + "请检查技术路径再带入项目。";
+}
+
+async function loadLocalPaper(runId) {
+  const requestId = ++state.localPaperRequestId;
+  element("localRunPaper").hidden = false;
+  element("localPaperPlan").hidden = true;
+  element("localPaperOutput").hidden = true;
+  element("localPaperFeedback").textContent = "";
+  try {
+    const paper = await api(`/api/runs/${runId}/paper`);
+    if (state.selectedLocalRunId !== runId || requestId !== state.localPaperRequestId) return;
+    const progress = await api(`/api/runs/${runId}/paper/status`);
+    if (state.selectedLocalRunId !== runId || requestId !== state.localPaperRequestId) return;
+    fillLocalPaperPlan(["idle", "complete"].includes(progress.stage) ? paper.plan : null);
+    if (progress.stage === "failed") {
+      element("localPaperFeedback").textContent = `上次代码分析未完成（${progress.done}/${progress.total}）：${progress.error || "请重新分析"}。此前的方案未作为新结果展示。`;
+    } else if (!paper.plan && ["idle", "complete"].includes(progress.stage)) {
+      try {
+        const scope = await api(`/api/runs/${runId}/paper/scope`);
+        if (state.selectedLocalRunId === runId && requestId === state.localPaperRequestId) {
+          element("localPaperFeedback").textContent = `仅读取 README.md（${Math.round(scope.source_bytes / 1024)} KiB），目录中 ${scope.ignored_data_files} 个其他文件不会发送模型。`;
+        }
+      } catch (error) {
+        if (state.selectedLocalRunId === runId && requestId === state.localPaperRequestId) element("localPaperFeedback").textContent = error.message;
+      }
+    }
+    const archive = element("localPaperOutput");
+    archive.hidden = !paper.manuscript;
+    const links = element("localPaperDownloads");
+    links.replaceChildren();
+    for (const name of paper.files || []) {
+      const link = document.createElement("a");
+      link.href = `/api/runs/${runId}/paper/files/${name}`;
+      link.textContent = name;
+      links.append(link);
+    }
+  } catch (error) {
+    if (state.selectedLocalRunId === runId) element("localPaperFeedback").textContent = error.message;
+  }
+}
+
+async function analyzeLocalPaper() {
+  const runId = state.selectedLocalRunId;
+  if (!runId) return toast("请先选择本机运行记录。", true);
+  if (!element("localPaperShareCode").checked) return toast("请先确认允许向模型发送 README.md。", true);
+  const button = element("localPaperAnalyze");
+  state.localPaperRequestId += 1;
+  setBusy(button, true, "正在分析…");
+  fillLocalPaperPlan(null);
+  element("localPaperFeedback").textContent = "正在阅读 README.md 并整理研究问题、技术方案和验证设计。";
+  const requestId = state.localPaperRequestId;
+  const progressTimer = window.setInterval(async () => {
+    try {
+      const progress = await api(`/api/runs/${runId}/paper/status`);
+      if (state.selectedLocalRunId !== runId || requestId !== state.localPaperRequestId) return;
+      const label = { scanning: "正在查找 README.md", modules: "正在分析 README.md", synthesis: "正在综合研究方案", complete: "分析完成", failed: "分析未完成" }[progress.stage];
+      if (label) element("localPaperFeedback").textContent = `${label}${progress.total ? ` · ${progress.done}/${progress.total}` : ""}${progress.error ? `：${progress.error}` : ""}`;
+    } catch { /* 临时轮询失败不打断正在进行的模型请求。 */ }
+  }, 1800);
+  try {
+    const plan = await api(`/api/runs/${runId}/paper/plan`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ note: element("localPaperNote").value.trim(), allow_model: true }),
+    });
+    if (state.selectedLocalRunId === runId && requestId === state.localPaperRequestId) fillLocalPaperPlan(plan);
+  } catch (error) {
+    if (state.selectedLocalRunId === runId && requestId === state.localPaperRequestId) {
+      element("localPaperFeedback").textContent = `代码分析未完成：${error.message}。此前的方案未作为新结果展示。`;
+      toast(error.message, true);
+    }
+  } finally { window.clearInterval(progressTimer); setBusy(button, false, ""); }
+}
+
+function transferLocalPaper() {
+  const idea = element("localResearchIdea").value.trim();
+  if (!state.selectedLocalRunId || idea.length < 8) return toast("请先检查并填写研究想法。", true);
+  state.pendingLocalRunId = state.selectedLocalRunId;
+  element("idea").value = idea;
+  element("outputLanguage").value = "en";
+  element("sceneType").value = "journal";
+  element("latexTemplate").value = "ieee_journal";
+  updateIdeaLength();
+  element("sourceRunBanner").hidden = false;
+  element("sourceRunLabel").textContent = `研究想法来自本机运行 ${state.pendingLocalRunId.slice(0, 10)}；请检查项目配置和资料后再创建。`;
+  showView("projects");
+  element("createForm").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function renderManuscriptSections(project) {
+  const panel = element("manuscriptSectionsPanel");
+  const available = !project.is_history && project.stage === "completed" && (project.artifacts || []).includes("paper.md");
+  panel.hidden = !available;
+  if (!available) { state.sectionViewKey = null; return; }
+  const key = `${project.id}:${project.updated_at}`;
+  if (state.sectionViewKey === key) return;
+  state.sectionViewKey = key;
+  state.sectionData = null;
+  state.selectedSectionIndex = null;
+  state.sectionRequestId += 1;
+  const list = element("manuscriptSectionList");
+  list.textContent = "正在加载章节…";
+  element("manuscriptSectionEditor").hidden = true;
+  api(`/api/projects/${project.id}/manuscript/sections`).then((data) => {
+    if (state.sectionViewKey !== key) return;
+    state.sectionData = data;
+    list.replaceChildren();
+    for (const section of data.sections) {
+      const card = document.createElement("article");
+      card.className = "manuscript-section-card";
+      const title = document.createElement("h5");
+      title.textContent = section.heading;
+      const text = document.createElement("pre");
+      text.textContent = section.content || "本节暂无正文";
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "secondary-button";
+      button.textContent = "修改这一节";
+      button.disabled = project.is_active === true || project.status === "running";
+      button.addEventListener("click", () => {
+        state.selectedSectionIndex = section.index;
+        state.sectionRequestId += 1;
+        element("manuscriptSectionTitle").textContent = `修改：${section.heading}`;
+        element("manuscriptSectionInstruction").value = "";
+        element("manuscriptSectionCandidate").value = "";
+        element("manuscriptSectionCandidateLabel").hidden = true;
+        element("applyManuscriptSection").hidden = true;
+        element("manuscriptSectionFeedback").textContent = "";
+        element("manuscriptSectionEditor").hidden = false;
+        element("manuscriptSectionEditor").scrollIntoView({ behavior: "smooth", block: "nearest" });
+      });
+      card.append(title, text, button);
+      list.append(card);
+    }
+  }).catch((error) => { if (state.sectionViewKey === key) list.textContent = error.message; });
+}
+
+async function suggestManuscriptSection() {
+  if (!state.currentProject || !state.sectionData || state.selectedSectionIndex == null) return;
+  const instruction = element("manuscriptSectionInstruction").value.trim();
+  if (instruction.length < 2) return toast("请填写本节的修改要求。", true);
+  const projectId = state.currentProject.id;
+  const index = state.selectedSectionIndex;
+  const baseHash = state.sectionData.base_hash;
+  const requestId = ++state.sectionRequestId;
+  const button = element("suggestManuscriptSection");
+  setBusy(button, true, "正在改写…");
+  try {
+    const response = await api(`/api/projects/${projectId}/manuscript/sections/suggest`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ index, base_hash: baseHash, instruction }),
+    });
+    if (state.currentProject?.id !== projectId || state.selectedSectionIndex !== index
+        || state.sectionData?.base_hash !== baseHash || requestId !== state.sectionRequestId
+        || element("manuscriptSectionInstruction").value.trim() !== instruction) return;
+    element("manuscriptSectionCandidate").value = response.candidate;
+    element("manuscriptSectionCandidateLabel").hidden = false;
+    element("applyManuscriptSection").hidden = false;
+    element("manuscriptSectionFeedback").textContent = "仅生成候选；请检查后再确认替换。";
+  } catch (error) {
+    if (state.currentProject?.id === projectId && state.selectedSectionIndex === index) {
+      element("manuscriptSectionFeedback").textContent = error.message;
+      toast(error.message, true);
+    }
+  } finally { setBusy(button, false, ""); }
+}
+
+async function applyManuscriptSection() {
+  if (!state.currentProject || !state.sectionData || state.selectedSectionIndex == null) return;
+  const content = element("manuscriptSectionCandidate").value.trim();
+  if (content.length < 20) return toast("本节修改候选过短。", true);
+  const projectId = state.currentProject.id;
+  const index = state.selectedSectionIndex;
+  const baseHash = state.sectionData.base_hash;
+  if (!window.confirm("确认只替换这一节？旧稿会保留在项目历史中，LaTeX 与质量检查将更新。")) return;
+  const button = element("applyManuscriptSection");
+  setBusy(button, true, "正在保存…");
+  try {
+    await api(`/api/projects/${projectId}/manuscript/sections/apply`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ index, base_hash: baseHash, content,
+        instruction: element("manuscriptSectionInstruction").value.trim() }),
+    });
+    if (state.currentProject?.id !== projectId || state.selectedSectionIndex !== index) return;
+    state.sectionViewKey = null;
+    await refreshCurrentProject();
+    toast(state.currentProject?.state?.section_review_blocked
+      ? "已更新所选章节；质量检查未通过，交付前请核对问题。"
+      : "已更新所选章节，其余章节保持不变。请复核质量检查。");
+  } catch (error) {
+    if (state.currentProject?.id === projectId && state.selectedSectionIndex === index) {
+      element("manuscriptSectionFeedback").textContent = error.message;
+      toast(error.message, true);
+    }
+  } finally { setBusy(button, false, ""); }
+}
+
+function roundMetric(value) {
+  return typeof value === "number" ? Number(value.toFixed(4)) : value;
+}
+
 function formatDate(value) {
   if (!value) return "时间未知";
   return new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
@@ -1687,6 +2741,84 @@ function bindEvents() {
     item.querySelector("button").addEventListener("click", () => selectWorkspaceStage(item.dataset.stage));
   });
   element("createForm").addEventListener("submit", createProject);
+  element("experimentForm").addEventListener("submit", runExperiment);
+  element("experimentProject").addEventListener("change", () => {
+    state.uploadedFolderProjectId = null;
+    state.uploadedFolderId = null;
+    clearOptimization();
+    element("experimentFolder").value = "";
+    element("experimentCommand").value = "";
+    element("experimentBaselineCommand").value = "";
+    renderFolderChoices([]);
+    refreshExperiments().catch((error) => toast(error.message, true));
+  });
+  element("experimentInputMode").addEventListener("change", updateExperimentInputMode);
+  element("experimentFolder").addEventListener("change", () => {
+    state.uploadedFolderProjectId = null;
+    state.uploadedFolderId = null;
+    clearOptimization();
+    element("experimentCommand").value = "";
+    element("experimentBaselineCommand").value = "";
+    renderFolderChoices(selectedFolderEntries().map((entry) => entry.path));
+  });
+  element("experimentMainFile").addEventListener("change", () => {
+    clearOptimization();
+    element("experimentCommand").value = folderCommand(element("experimentMainFile").value);
+  });
+  element("experimentOptimizeMode").addEventListener("change", () => {
+    updateOptimizationMode();
+  });
+  element("experimentOptimizationGoal").addEventListener("input", clearOptimization);
+  element("experimentAlgorithmFiles").addEventListener("change", clearOptimization);
+  element("generateOptimization").addEventListener("click", generateOptimization);
+  element("experimentBaselineFile").addEventListener("change", () => {
+    const baseline = element("experimentBaselineFile").value;
+    element("experimentBaselineCommandRow").hidden = !baseline;
+    element("experimentBaselineCommand").value = folderCommand(baseline);
+  });
+  element("suggestExperimentCommand").addEventListener("click", suggestExperimentCommand);
+  element("refreshExperiment").addEventListener("click", () => refreshExperiments().catch((error) => toast(error.message, true)));
+  element("localRunForm").addEventListener("submit", createLocalRun);
+  element("localRunFiles").addEventListener("change", () => {
+    clearLocalDraft(false);
+    element("clearLocalRunFiles").hidden = !element("localRunFiles").files.length;
+  });
+  element("clearLocalRunFiles").addEventListener("click", () => clearLocalDraft(true));
+  element("deleteLocalRunDraft").addEventListener("click", async () => {
+    const runId = state.localRunDraftId;
+    if (!runId) return;
+    if (!window.confirm("删除这条刚上传的运行目录？其代码与日志将一并删除。")) return;
+    try { await api(`/api/runs/${runId}`, { method: "DELETE" }); }
+    catch (error) { toast(error.message, true); return; }
+    if (state.selectedLocalRunId === runId) {
+      state.selectedLocalRunId = null;
+      state.localRunLogSize = 0;
+    }
+    clearLocalDraft(true);
+    element("localRunFeedback").textContent = "已删除上传目录。";
+    refreshLocalRuns().catch(() => {});
+    loadProjects().catch(() => {});
+  });
+  element("startLocalRun").addEventListener("click", startLocalRun);
+  element("suggestLocalRun").addEventListener("click", () => suggestLocalRun(element("localRunAllowModel").checked));
+  element("refreshLocalRuns").addEventListener("click", () => refreshLocalRuns().catch((error) => toast(error.message, true)));
+  element("localPaperAnalyze").addEventListener("click", analyzeLocalPaper);
+  element("localPaperTransfer").addEventListener("click", transferLocalPaper);
+  element("localPaperOpenProject").addEventListener("click", () => {
+    const projectId = element("localPaperOpenProject").dataset.projectId;
+    if (projectId) openProject(projectId);
+  });
+  element("cancelSourceRun").addEventListener("click", () => {
+    state.pendingLocalRunId = null;
+    element("sourceRunBanner").hidden = true;
+  });
+  element("suggestManuscriptSection").addEventListener("click", suggestManuscriptSection);
+  element("manuscriptSectionInstruction").addEventListener("input", () => {
+    state.sectionRequestId += 1;
+    element("manuscriptSectionCandidateLabel").hidden = true;
+    element("applyManuscriptSection").hidden = true;
+  });
+  element("applyManuscriptSection").addEventListener("click", applyManuscriptSection);
   element("refreshProjects").addEventListener("click", () => loadProjects().catch((error) => toast(error.message, true)));
   element("refreshProject").addEventListener("click", () => refreshCurrentProject().catch((error) => toast(error.message, true)));
   element("runProject").addEventListener("click", runCurrentProject);
@@ -1732,6 +2864,7 @@ function bindEvents() {
 
 async function init() {
   bindEvents();
+  updateExperimentInputMode();
   element("idea").addEventListener("input", () => {
     updateIdeaLength();
     if (element("idea").matches(":hover")) expandIdeaOnDemand();

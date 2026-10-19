@@ -150,9 +150,10 @@ def _planned_tables(plan: Mapping[str, Any] | None) -> list[str]:
     methods = [_short_label(proposed), *baselines]
     pending = r"\textit{pending}"
     dataset_rows = "\n".join(f"{_escape(item)} & {pending} & {pending} \\\\" for item in datasets)
-    width = "table*" if len(metrics) >= 2 or len(datasets) > 1 else "table"
-    table_width = r"\textwidth" if width == "table*" else r"\columnwidth"
+    width = "table*"
     header = "Dataset & Method & " + " & ".join(_escape(item) for item in metrics) + r" \\"
+    group_header = (r"\multicolumn{2}{c}{Study Setup} & "
+                    + rf"\multicolumn{{{len(metrics)}}}{{c}}{{Evaluation Metrics}}" + r" \\")
     comparison_rows = "\n".join(
         f"{_escape(dataset)} & {_escape(method)} & "
         + " & ".join([pending] * len(metrics)) + r" \\"
@@ -160,7 +161,7 @@ def _planned_tables(plan: Mapping[str, Any] | None) -> list[str]:
     )
     return [
         "\\begin{table}[!t]\n\\centering\n\\caption{Planned Dataset Characteristics (Values Pending)}\n\\label{tab:datasets}\n\\footnotesize\n\\begin{tabular}{lcc}\n\\hline\nDataset & Samples & Split \\\\\n\\hline\n" + dataset_rows + "\n\\hline\n\\end{tabular}\n\\end{table}",
-        f"\\begin{{{width}}}[!t]\n\\centering\n\\caption{{Planned Dataset--Method Comparison (Cells Pending Verification)}}\n\\label{{tab:comparison}}\n\\footnotesize\n\\resizebox{{{table_width}}}{{!}}{{%\n\\begin{{tabular}}{{ll{'c' * len(metrics)}}}\n\\hline\n" + header + "\n\\hline\n" + comparison_rows + f"\n\\hline\n\\end{{tabular}}%\n}}\n\\end{{{width}}}",
+        f"\\begin{{{width}}}[!t]\n\\centering\n\\caption{{Planned Dataset--Method Comparison (Cells Pending Verification)}}\n\\label{{tab:comparison}}\n\\footnotesize\n\\renewcommand{{\\arraystretch}}{{1.15}}\n\\begin{{tabular*}}{{\\textwidth}}{{@{{\\extracolsep{{\\fill}}}}ll{'c' * len(metrics)}@{{}}}}\n\\hline\n" + group_header + "\n\\hline\n" + header + "\n\\hline\n" + comparison_rows + f"\n\\hline\n\\end{{tabular*}}\n\\end{{{width}}}",
     ]
 
 

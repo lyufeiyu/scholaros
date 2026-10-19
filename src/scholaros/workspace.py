@@ -180,6 +180,12 @@ def build_figure_story(
     question = str(design.get("research_question") or "已确认的研究问题")
     hypotheses = [str(item) for item in design.get("hypotheses", [])[:3]]
     baselines = [str(item) for item in design.get("baselines", [])[:3]]
+    datasets = [str(item) for item in design.get("datasets", [])[:2]]
+    variables = [str(item) for item in design.get("independent_variables", [])[:2]]
+    metrics = [str(item) for item in design.get("metrics", [])[:2]]
+    outcomes = [str(item) for item in design.get("dependent_variables", [])[:2]]
+    proposed_method = str(design.get("proposed_method") or "Proposed method")
+    falsification = str(design.get("falsification") or "预注册失败条件")
     figures: list[dict[str, Any]] = [
         {
             "id": "figure-1",
@@ -239,6 +245,14 @@ def build_figure_story(
                     "按输入、处理模块、输出和验证反馈四层组织机制或系统组件。",
                     "每个组件标注输入输出、关键假设及其证据来源。",
                 ],
+                "architecture": {
+                    "inputs": datasets or variables or ["研究材料 / 数据"],
+                    "constraints": variables or ["纳入规则与预算"],
+                    "method": proposed_method,
+                    "comparisons": baselines or ["对照条件"],
+                    "outputs": metrics or outcomes or ["主要结局指标"],
+                    "validation": falsification,
+                },
                 "visual_encoding": [
                     "模块使用统一矩形节点，数据流使用箭头，反馈或迭代使用回环箭头。",
                     "待验证机制使用虚线边框，并在图例中单独说明。",

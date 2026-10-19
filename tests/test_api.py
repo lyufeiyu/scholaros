@@ -167,6 +167,11 @@ def test_web_assets_and_document_upload(settings) -> None:
         assert "API 文档 ↗" not in home.text
         assert 'name="executionMode" value="guided" checked' in home.text
         assert 'name="executionMode" value="automatic"' in home.text
+        assert "无参考资料时检索可能自动外发" in home.text
+        assert "指标判优方向" in home.text
+        assert 'id="experimentFolder" type="file" webkitdirectory' in home.text
+        assert 'id="experimentAlgorithmFiles" multiple' in home.text
+        assert 'rel="icon" type="image/svg+xml" href="/static/favicon.svg"' in home.text
         assert 'id="rerunStage"' not in home.text
         assert 'id="rerunStageButton"' not in home.text
         assert 'id="historyPanel"' in home.text
@@ -176,7 +181,7 @@ def test_web_assets_and_document_upload(settings) -> None:
         assert "按需加载" not in home.text
         assert "https://cdn.jsdelivr.net/npm/mermaid@11.12.1/dist/mermaid.min.js" in home.text
         assert "Mermaid + 可读表格" in home.text
-        assert "从问题收敛、候选文献收集、证据账本到方法与草稿辅助" in home.text
+        assert "需要时可确认、修改或重跑" in home.text
         assert "让研究过程" not in home.text
         assert "跨源论文检索</h2>" not in home.text
         assert "QUESTION → EVIDENCE → METHOD" in home.text
@@ -185,6 +190,11 @@ def test_web_assets_and_document_upload(settings) -> None:
         script = client.get("/static/app.js")
         assert script.status_code == 200
         assert "async function createProject" in script.text
+        assert 'subgraph IN["输入与约束"]' in script.text
+        assert 'subgraph CORE["方法与比较"]' in script.text
+        assert 'stroke-dasharray:4 3' in script.text
+        assert 'T["${title}"]' not in script.text
+        assert "requestId !== state.experimentRequestId" in script.text
         assert "async function deleteCurrentProject" in script.text
         assert "async function confirmSearchPlan" in script.text
         assert "setSearchBusy" not in script.text
@@ -867,3 +877,57 @@ def test_duplicate_run_is_rejected(settings) -> None:
         project_id = created.json()["id"]
         duplicate = client.post(f"/api/projects/{project_id}/run")
         assert duplicate.status_code in {202, 409}
+
+
+def test_local_run_endpoints_are_loopback_only_and_preview(settings) -> None:
+    workflow = ResearchWorkflow(settings, search=PaperSearchService([]))
+    app = create_app(workflow)
+    with TestClient(app) as client:
+        uploaded = client.post(
+            "/api/runs",
+            data={"paths": "src/main.py", "note": "example"},
+            files={"files": ("main.py", b"print('ok')")},
+        )
+        assert uploaded.status_code == 201
+        run_id = uploaded.json()["id"]
+        detail = client.get(f"/api/runs/{run_id}")
+        assert detail.json()["files"] == ["src/main.py"]
+        preview = client.get(f"/api/runs/{run_id}/files", params={"path": "src/main.py"})
+        assert preview.json()["content"] == "print('ok')"
+        denied = client.post(
+            "/api/runs", headers={"Origin": "http://untrusted.example"},
+            data={"paths": "main.py"}, files={"files": ("main.py", b"x")},
+        )
+        assert denied.status_code == 403
+        assert client.get("/api/runs", headers={"Host": "evil.example"}).status_code == 403
+        assert client.get(f"/api/runs/{run_id}/files", params={"path": "../x"}).status_code == 422
+    with TestClient(app, client=("192.0.2.1", 1234)) as client:
+        assert client.get("/api/runs").status_code == 403
+
+
+def test_local_run_upload_more_than_parser_default_file_count(settings) -> None:
+    workflow = ResearchWorkflow(settings, search=PaperSearchService([]))
+    with TestClient(create_app(workflow)) as client:
+        parts = []
+        for index in range(1001):
+            parts.append(("paths", (None, f"pkg/file_{index}.py")))
+            parts.append(("files", (f"file_{index}.py", b"x")))
+        uploaded = client.post("/api/runs", files=parts)
+        assert uploaded.status_code == 201, uploaded.text
+        assert len(uploaded.json()["file_hashes"]) == 1001
+
+
+def test_project_folder_upload_more_than_150_files(settings) -> None:
+    workflow = ResearchWorkflow(settings, search=PaperSearchService([]))
+    with TestClient(create_app(workflow)) as client:
+        created = client.post("/api/projects", json={
+            "idea": "测试大量文件的实验目录上传", "run_now": False,
+        })
+        assert created.status_code == 201
+        parts = []
+        for index in range(151):
+            parts.append(("paths", (None, f"pkg/file_{index}.py")))
+            parts.append(("files", (f"file_{index}.py", b"print(1)")))
+        response = client.post(f"/api/projects/{created.json()['id']}/experiments/folder", files=parts)
+        assert response.status_code == 201, response.text
+        assert len(response.json()["files"]) == 151

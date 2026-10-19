@@ -6,7 +6,7 @@ A research assistant workspace for traceable evidence, method design, and writin
 
 **English** | [简体中文](./README.zh-CN.md)
 
-[![Version](https://img.shields.io/badge/version-0.3.1-456B93)](./pyproject.toml)
+[![Version](https://img.shields.io/badge/version-0.4.0-456B93)](./pyproject.toml)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](./LICENSE)
 [![Checks](https://img.shields.io/badge/checks-run_locally-586069)](./scripts/check.sh)
@@ -26,6 +26,16 @@ The terminal CLI and Web workspace share the same workflow. ScholarOS produces c
 ## 📢 News
 
 <details open>
+<summary>October 19, 2026 · v0.4.0 — Experiments, local runs, and README-driven research workflows</summary>
+
+- Added folder-based computational experiments, reviewable multi-file algorithm optimization, matched baseline/candidate runs, and reproducible result records.
+- Added project-independent local runs with live terminal output, CSV/TXT metric summaries, file browsing, history, and README-to-research-idea transfer.
+- Simplified code-to-research analysis to read only a root-level `README.md`, with a detailed research prompt and a clear missing-README message.
+- Added section-level manuscript revision and wider IEEE comparison tables, plus a local fallback that preserves completed README analysis when final model synthesis fails.
+
+</details>
+
+<details>
 <summary>October 1, 2026 · Unreleased — IEEE export, workspace options, and research skills</summary>
 
 - Added explicit generic/IEEE journal LaTeX selection; IEEE exports now use native abstract, keywords, and bibliography structures, with unresolved citations blocking delivery readiness.
@@ -82,6 +92,8 @@ ScholarOS is a research assistance tool, not an autonomous paper author, and mus
 - Assists with problem definition, hypotheses, method design, evidence ledgers, and Markdown research drafts.
 - Supports six work types: build from materials, rewrite, integrity audit, independent review, revision, and target transfer. Project configuration records venue/scene, language, research boundary, author voice, learning targets, reference target, and figure policy.
 - Accepts PDF, DOCX, TXT, Markdown, TeX, BibTeX, CSV, and JSON as references or experimental result materials.
+- The Web Experiment page accepts a project folder with nested files and a selected Python entrypoint, or the original CSV plus two-script input. With explicit code-sharing consent, a configured model may suggest a restricted launch command or propose edits to selected existing Python files. The team reviews a diff before running the original and candidate under matched conditions in an existing local Docker image. A complete report enters manuscript materials only after confirmation; see [the experiment guide](./docs/zh-CN/experiments.md).
+- The Web Local Run page runs an uploaded code directory on this machine without a project: you give the run command and a metric file (CSV or TXT), then it tails terminal output, extracts numeric metric columns / keys into a summary table, and stores independent run records for later review. Host execution requires explicit risk confirmation. A selected run can produce a detailed, editable research idea from its README; the researcher brings that idea into a guided project before drafting. Completed manuscripts can be reviewed and revised one section at a time.
 - Gathers and deduplicates candidate papers in the research-materials stage from arXiv, OpenAlex, Crossref, Semantic Scholar, DBLP, and ACM metadata.
 - Shows a search-plan confirmation for projects with uploaded references and for guided projects; reports each source failure separately.
 - Runs nine deterministic checks on both the initial and revised draft: section structure, evidence availability, in-text citations, method elements, figure design, table design, result provenance, researcher-responsibility statement, and draft depth.
@@ -137,7 +149,7 @@ scholaros run "How can citation reliability in research agents be evaluated?" --
 
 ### Work step by step
 
-Terminal and Web projects now use stage-by-stage interaction by default. The workflow pauses after every stage; you can save an edit, rerun the current stage, and approve it before continuing. Choose one-step execution or pass `--automatic` only when you want the remaining stages to run continuously. Search terms are still confirmed separately before being sent to paper sources.
+Terminal and Web projects now use stage-by-stage interaction by default. The workflow pauses after every stage; you can save an edit, rerun the current stage, and approve it before continuing. Choose one-step execution or pass `--automatic` only when you want the remaining stages to run continuously. Outbound search terms require separate confirmation in guided mode or when reference materials were uploaded; without such materials, one-step mode may send search terms automatically.
 
 ```bash
 scholaros run "How can citation reliability in research agents be evaluated?"             # interactive by default
@@ -189,17 +201,10 @@ Both `.scholaros/` and `.env` are ignored by Git. Before publishing code, filing
 
 ## Architecture overview
 
-```mermaid
-flowchart LR
-    UI["CLI / Terminal / Web / API"] --> WF["ResearchWorkflow\nrecoverable state machine"]
-    WF --> RT["AgentLoop\nmessages, tools, events"]
-    RT --> LLM["OpenAI-compatible\nmodel"]
-    WF --> SEARCH["PaperSearchService\nadapters, deduplication, strict matching"]
-    SEARCH --> SOURCES["arXiv · OpenAlex · Crossref\nSemantic Scholar · DBLP · ACM · IEEE"]
-    WF --> EVIDENCE["Evidence Ledger\ncitations and source boundaries"]
-    WF --> STORE["SQLite + artifacts\nstate, events, outputs"]
-    WF --> PAPER["paper.md\nresearch draft and figure/table plans"]
-```
+<p align="center">
+  <a href="./images/ScholarOS-framework.png"><img src="./images/ScholarOS-framework.png" width="100%" alt="ScholarOS v0.4.0 system architecture"></a>
+</p>
+<p align="center"><sub>Human confirmation spans the recoverable research workflow, evidence chain, computational evaluation, manuscript revision, and local delivery boundaries.</sub></p>
 
 The repository uses a standard `src` layout:
 
@@ -235,7 +240,7 @@ To add a paper source, implement the shared `PaperSource` adapter interface and 
 - IEEE Xplore requires an official API key. A university web login is not the same as API or text-and-data-mining authorization.
 - ScholarOS does not bypass paywalls, CAPTCHAs, robots restrictions, browser cookies, or institutional licenses.
 - The current release is a local, single-process workspace. A multi-user deployment needs a task queue, concurrent database controls, authentication, and audit infrastructure.
-- Evidence synthesis still requires verification against the original text. OCR, experiment execution, generated result figures, and computed result tables are outside the current MVP.
+- Evidence synthesis still requires verification against original text. Model-proposed changes to selected Python files require review and never overwrite the uploaded project; execution requires an existing Docker image. Unreviewed code changes, dependency installation, physical experiments, OCR, and automatic result figures/tables remain outside this MVP.
 - Passing automated checks does not prove that a conclusion is correct, that a manuscript meets submission requirements, or that it complies with an institution's academic-integrity policy.
 
 See [Paper-source permissions and compliance](./docs/permissions.md) for details.

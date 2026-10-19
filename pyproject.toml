@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "scholaros"
-version = "0.3.1"
+version = "0.4.0"
 description = "面向研究者的证据追踪、方法设计与写作辅助工作台"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -38,7 +38,7 @@ where = ["src"]
 include = ["scholaros*"]
 
 [tool.setuptools.package-data]
-scholaros = ["static/*.html", "static/*.css", "static/*.js", "templates/ieee/*.cls", "templates/ieee/*.bst", "skills/*/SKILL.md"]
+scholaros = ["static/*.html", "static/*.css", "static/*.js", "static/*.svg", "templates/ieee/*.cls", "templates/ieee/*.bst", "skills/*/SKILL.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

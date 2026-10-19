@@ -8,6 +8,7 @@ MODEL_END = "<!-- model-instructions:end -->"
 
 ROLE_SKILLS: dict[str, tuple[str, ...]] = {
     "研究规划 Agent": ("research-scoping",),
+    "代码研究构想 Agent": ("code-research-synthesis", "research-scoping", "research-method-design"),
     "论文检索规划 Agent": ("literature-discovery",),
     "论文发现 Agent": ("literature-discovery",),
     "研究方法 Agent": ("research-method-design", "evidence-ledger"),

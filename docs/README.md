@@ -8,6 +8,7 @@ Choose a document by task:
 |---|---|
 | Installation, Conda, models, and keys | [Environment configuration](environment.md) |
 | Guided checkpoints, partial reruns, and old versions | [Guided work and recovery](workflow.md) |
+| Run bounded computational experiments from supplied data and scripts | [Experiment workbench (Chinese)](zh-CN/experiments.md) |
 | Work types, project configuration, figure decisions, feedback, and delivery | [Project workbench and delivery](workbench.md) |
 | Code organization and extension points | [Code guide](code-guide.md) |
 | State machine, Agent runtime, and data flow | [Architecture](architecture.md) |

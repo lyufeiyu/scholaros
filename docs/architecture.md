@@ -42,7 +42,7 @@ stateDiagram-v2
     ScopeApproval --> Searching: approved
 ```
 
-Each stage persists its current state before execution, stores artifacts on completion, and advances the saved cursor. `resume` retries the interrupted stage without repeating completed upstream work; it does not bypass a pending confirmation. The default interactive mode pauses after every stage; one-step mode runs continuously, while outbound search still requires its separate confirmation. See [Guided work and recovery](workflow.md) for all checkpoints and actions. A single paper-source failure is recorded; zero total results still stop a normal workflow.
+Each stage persists its current state before execution, stores artifacts on completion, and advances the saved cursor. `resume` retries the interrupted stage without repeating completed upstream work; it does not bypass a pending confirmation. The default interactive mode pauses after every stage; one-step mode runs continuously, while outbound search requires separate confirmation in guided mode or with uploaded reference materials. See [Guided work and recovery](workflow.md) for all checkpoints and actions. A single paper-source failure is recorded; zero total results still stop a normal workflow.
 
 ## Runtime design choices
 
@@ -83,11 +83,11 @@ The six LLM prompt roles in `ResearchWriter` load only their relevant short skil
 9. **Safe grouped search:** outbound terms are checked for structure and topic relation; complementary query clusters retain coverage. A source that rate-limits or fails is not repeatedly hit in the same batch.
 10. **Empty-search stop:** a normal workflow stops before writing when no paper is found and exposes queries plus filter statistics. Only explicit offline demonstration mode can bypass this stop.
 11. **Artifact isolation on rerun:** first snapshot project state and generated artifacts, then invalidate the selected stage and its downstream outputs. Upstream results and uploaded text remain. A full restart invalidates every generated stage; old versions remain under `history/` until the project is deleted.
-12. **Researcher final responsibility:** outputs are candidate plans and reviewable drafts. Original-source verification, method choice, experiments, interpretation, ethics, authorship, and submission remain human responsibilities.
+12. **Researcher final responsibility:** outputs are candidate plans and reviewable drafts. Original-source verification, method choice, experiment design and authorization, interpretation, ethics, authorship, and submission remain human responsibilities. The experiment page only runs supplied code after confirmation.
 
 ## From MVP to research platform
 
-Version 0.2 adds a stage-based project workbench, six task types, evidence-oriented research and delivery settings, contribution/figure decisions, feedback-driven revision, Markdown/TeX export, and a verifiable local delivery package. Page-level full-text parsing, claim-level evidence, experiment execution, final media rendering, collaboration, and expert approval remain later work.
+Version 0.2 adds a stage-based project workbench, six task types, evidence-oriented research and delivery settings, contribution/figure decisions, feedback-driven revision, Markdown/TeX export, and a verifiable local delivery package. The separate experiment page runs supplied computational projects in restricted local Docker and lets a model propose edits to approved existing Python files for review before paired experiments. Unreviewed code changes, physical experiments, page-level full-text parsing, claim-level evidence, final media rendering, collaboration features, and expert approval remain later work.
 
 RL should not begin by training an LLM. After sufficient events, check outcomes, and user feedback exist, it could optimize workflow decisions such as when to search, what to read, which role to call, and when to request human confirmation.
 

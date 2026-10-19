@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="ScholarOS：面向研究者的证据追踪、方法设计与写作辅助工作台">
   <title>ScholarOS · Research Assistant Workspace</title>
-  <link rel="stylesheet" href="/static/styles.css?v=0.3.1-2">
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="stylesheet" href="/static/styles.css?v=0.4.0">
 </head>
 <body>
   <div class="app-shell">
@@ -19,7 +20,7 @@
             <path d="m16.6 19.3-1.4 1.4"></path>
           </svg>
         </span>
-        <span><strong>ScholarOS <span id="brandVersion" class="brand-version">v0.3.1</span></strong><small>Research Workspace</small></span>
+        <span><strong>ScholarOS <span id="brandVersion" class="brand-version">v0.4.0</span></strong><small>Research Workspace</small></span>
       </a>
 
       <nav class="primary-nav" aria-label="主导航">
@@ -28,6 +29,12 @@
         </button>
         <button id="workspaceNav" class="nav-button" type="button" data-view="workspace">
           <span aria-hidden="true">◈</span> 当前研究项目
+        </button>
+        <button class="nav-button" type="button" data-view="experiments">
+          <span aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><rect x="3" y="4" width="18" height="13" rx="2"></rect><path d="M8 21h8m-4-4v4"></path></svg></span> 实验
+        </button>
+        <button class="nav-button" type="button" data-view="runs">
+          <span aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M4 17l6-6-6-6"></path><path d="M12 19h8"></path></svg></span> 本机运行
         </button>
       </nav>
 
@@ -56,7 +63,7 @@
         <div class="hero-grid">
           <div class="hero-copy">
             <span class="hero-kicker">QUESTION → EVIDENCE → METHOD</span>
-            <p>从问题收敛、候选文献收集、证据账本到方法与草稿辅助，每一步都可恢复、可检查，并由研究者确认。</p>
+            <p>从问题收敛、资料与证据整理到方法、实验和稿件，每一步都有可检查的结果；需要时可确认、修改或重跑。</p>
           </div>
         </div>
 
@@ -66,6 +73,10 @@
             <p>一句尚不成熟的想法也可以，ScholarOS 会给出可检验的候选规格，供研究者审阅和修订。</p>
           </div>
           <form id="createForm">
+            <div id="sourceRunBanner" class="source-run-banner" hidden>
+              <span id="sourceRunLabel"></span>
+              <button id="cancelSourceRun" type="button" class="secondary-button">取消带入</button>
+            </div>
             <div class="intake-grid">
               <fieldset class="idea-block">
                 <legend>研究想法或核心问题</legend>
@@ -74,7 +85,7 @@
                 <fieldset class="execution-mode">
                   <legend>执行方式</legend>
                   <label><input type="radio" name="executionMode" value="guided" checked><span><strong>逐步交互（默认）</strong><small>每个阶段完成后停下，可修改、重跑当前阶段或确认进入下一步。</small></span></label>
-                  <label><input type="radio" name="executionMode" value="automatic"><span><strong>一步完成</strong><small>除外发检索确认外，连续执行全部阶段。</small></span></label>
+                  <label><input type="radio" name="executionMode" value="automatic"><span><strong>一步完成</strong><small>普通阶段连续执行；无参考资料时检索可能自动外发，实验仍需单独授权。</small></span></label>
                 </fieldset>
               </fieldset>
             <fieldset class="configuration-fieldset">
@@ -190,6 +201,139 @@
         </section>
 
         </section>
+
+      <section id="experimentsView" class="view">
+        <section class="panel experiment-panel">
+          <div class="panel-heading"><div><span class="step-number">02</span><h3>计算实验</h3></div><p>提供数据、脚本和指标后运行。每次保存输入与参数记录；使用本机已有 Docker 镜像 python:3.11-slim，不会在宿主机直接执行脚本。</p></div>
+          <form id="experimentForm">
+            <div class="experiment-fields">
+              <label>所属研究项目<select id="experimentProject" required><option value="">请先创建研究项目</option></select></label>
+              <label>代码提供方式<select id="experimentInputMode"><option value="folder" selected>项目文件夹</option><option value="single">CSV + 两个 Python 脚本</option></select></label>
+              <label>研究假设<input id="experimentHypothesis" required minlength="8" maxlength="2000" placeholder="例如：候选方法在相同数据与预算下能否改善主指标？"></label>
+              <label>候选方案相对基线的变化<input id="experimentIntervention" required minlength="4" maxlength="1000" placeholder="说明候选方法相对基线改变了什么"></label>
+              <label>主指标键名<input id="experimentMetric" required pattern="[A-Za-z][A-Za-z0-9_]*" maxlength="64" placeholder="例如 accuracy"></label>
+              <label>指标判优方向<select id="experimentDirection"><option value="maximize">越大越好</option><option value="minimize">越小越好</option></select></label>
+            </div>
+            <div id="experimentSingleInputs" class="experiment-uploads" hidden>
+              <label>数据集 CSV<input id="experimentDataset" type="file" accept=".csv"></label>
+              <label>基线脚本 Python<input id="experimentBaseline" type="file" accept=".py"></label>
+              <label>候选脚本 Python<input id="experimentCandidate" type="file" accept=".py"></label>
+            </div>
+            <div id="experimentFolderInputs" class="experiment-folder">
+              <label class="experiment-folder-picker">项目文件夹（包括子目录）<input id="experimentFolder" type="file" webkitdirectory directory multiple></label>
+              <p class="form-feedback">文件数量不限、合计不超过 2 GiB；隐藏文件不会上传。请勿将密钥放入项目目录。</p>
+              <div class="experiment-fields">
+                <label>主文件<select id="experimentMainFile"><option value="">选择 Python 主文件</option></select></label>
+                <label>基线文件（可选）<select id="experimentBaselineFile"><option value="">不使用基线文件</option></select></label>
+                <label id="experimentBaselineCommandRow" class="experiment-wide" hidden>基线运行命令<input id="experimentBaselineCommand" maxlength="500" placeholder="例如 python scripts/baseline.py --config configs/base.json"></label>
+                <label>数据文件（可选）<select id="experimentDataFile"><option value="">脚本自行读取目录内文件</option></select></label>
+                <label class="experiment-wide">终端命令参考（可选）<input id="experimentReferenceCommand" maxlength="500" placeholder="例如 python scripts/run.py --config configs/default.json"></label>
+                <label class="experiment-wide">确认后执行的命令<input id="experimentCommand" maxlength="500" placeholder="选择主文件后填入建议命令，可自行修改"></label>
+              </div>
+              <div class="experiment-command-actions">
+                <label><input id="experimentShareCode" type="checkbox"> 允许将主文件片段、所选算法文件、README 片段及目录清单发送给已配置模型</label>
+                <button id="suggestExperimentCommand" class="secondary-button" type="button">获取命令建议</button>
+                <span id="experimentCommandFeedback" class="form-feedback" role="status"></span>
+              </div>
+              <div class="experiment-optimization">
+                <label><input id="experimentOptimizeMode" type="checkbox"> 算法优化模式：可改多个算法文件，审核后对照运行原版与改进版</label>
+                <div id="experimentOptimizationControls" hidden>
+                  <div class="experiment-fields">
+                    <label class="experiment-wide">允许模型修改的 Python 文件（默认选择全部现有 Python 文件）<select id="experimentAlgorithmFiles" multiple size="5"></select></label>
+                    <p class="form-feedback experiment-wide">模型会从所选文件中判断实际需要修改的文件；不限制算法文件数量，但单文件不超过 32 KiB，所选代码合计不超过 256 KiB。</p>
+                    <label class="experiment-wide">希望改进的算法目标<input id="experimentOptimizationGoal" maxlength="1000" placeholder="例如减少重复搜索，同时保持输出指标和命令行接口不变"></label>
+                  </div>
+                  <button id="generateOptimization" class="secondary-button" type="button">生成改进候选</button>
+                  <span id="experimentOptimizationFeedback" class="form-feedback" role="status"></span>
+                  <div id="experimentOptimizationPreview" hidden>
+                    <p id="experimentOptimizationReason"></p>
+                    <pre id="experimentOptimizationDiff"></pre>
+                    <details><summary>查看候选文件全文</summary><pre id="experimentOptimizationCode"></pre></details>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <details class="experiment-options"><summary>高级选项 · 默认 3 个种子、每次 60 秒</summary>
+              <div class="experiment-fields">
+                <label>随机种子（逗号分隔，最多 3 个）<input id="experimentSeeds" value="11,23,37"></label>
+                <label>每试验时间上限（秒）<input id="experimentTimeout" type="number" min="10" max="300" value="60"></label>
+                <label class="experiment-wide">候选参数组（JSON 数组，最多 4 组）<textarea id="experimentVariants" rows="3">[{}]</textarea></label>
+              </div>
+            </details>
+            <p class="form-feedback">脚本可读取 SCHOLAROS_DATASET、SCHOLAROS_SEED、SCHOLAROS_PARAMS，并向 SCHOLAROS_OUTPUT 写入 {"metrics":{"指标键名":数值}}。当前镜像仅包含 Python 标准库；文件夹按只读方式挂载，命令建议需检查后才会执行。指标由脚本计算，平台不验证评价方法是否公平。</p>
+            <label class="experiment-consent"><input id="experimentConsent" type="checkbox" required> 我确认脚本与数据有权使用，并理解容器隔离不能代替对代码和数据的安全审查。</label>
+            <div class="experiment-actions"><button id="runExperiment" class="primary-button small" type="submit">上传材料并开始实验</button><button id="refreshExperiment" class="secondary-button" type="button">刷新实验状态</button><span id="experimentFeedback" class="form-feedback" role="status"></span></div>
+          </form>
+        </section>
+        <section class="panel experiment-panel"><div class="subpanel-heading"><h4>实验记录与结果</h4><span>原始试验 · 可追溯</span></div><div id="experimentRecords" class="experiment-records"><p class="muted">选择项目后查看实验材料及运行记录。</p></div></section>
+      </section>
+
+      <section id="runsView" class="view">
+        <section class="panel experiment-panel">
+          <div class="panel-heading"><div><span class="step-number">03</span><h3>本机独立运行</h3></div><p>不选择研究项目，上传代码目录并在本机执行。请明确填写运行命令和指标文件（CSV 或 TXT），也可以给出参考命令后让模型识别。终端输出会滚动记录，指标文件中的数值列会被抽取成统计表。这是有意的宿主机执行，请务必只运行自己确认过的代码。</p></div>
+          <form id="localRunForm">
+            <div class="experiment-fields">
+              <label>标签 / 备注<input id="localRunNote" maxlength="1000" placeholder="例如：MT-MOE 在 CIFAR-10 上的 100 epoch 训练"></label>
+              <label class="experiment-wide">运行命令参考（可选）<input id="localRunReference" maxlength="2000" placeholder="例如 python main.py / bash run.sh"></label>
+              <label class="experiment-wide">执行命令<input id="localRunCommand" maxlength="2000" placeholder="例如 python main.py --epochs 100"></label>
+              <label>指标文件相对路径（CSV 或 TXT）<input id="localRunCsvPath" maxlength="300" placeholder="例如 metrics.csv / ../outputs/运行名/任务/metrics.csv"></label>
+              <label>指标列名（逗号分隔，留空则提取全部数值列 / 键）<input id="localRunColumns" maxlength="500" placeholder="例如 accuracy,loss"></label>
+            </div>
+            <div class="experiment-command-actions">
+              <label><input id="localRunAllowModel" type="checkbox"> 允许目录、脚本片段与指标文件发送给已配置模型以识别命令和指标</label>
+              <button id="suggestLocalRun" class="secondary-button" type="button">让模型识别命令与指标</button>
+              <span id="localRunSuggestFeedback" class="form-feedback" role="status"></span>
+            </div>
+            <div class="local-run-picker-row">
+              <label class="experiment-folder-picker local-run-folder">上传代码目录（包括子目录）<input id="localRunFiles" type="file" webkitdirectory directory multiple></label>
+              <button id="clearLocalRunFiles" class="secondary-button" type="button" hidden>清除已选目录</button>
+            </div>
+            <p class="form-feedback">文件数量不限、合计不超过 2 GiB，隐藏文件不会上传。命令工作目录固定为上传目录，日志最多保留 2 MiB。</p>
+            <label class="experiment-consent"><input id="localRunConsent" type="checkbox"> 我确认将在宿主机直接执行上面的命令，风险由我自行承担。</label>
+            <div class="experiment-actions">
+              <button id="createLocalRun" class="primary-button small" type="submit">上传并建立运行记录</button>
+              <button id="startLocalRun" class="primary-button small" type="button" disabled>确认并开始运行</button>
+              <button id="deleteLocalRunDraft" class="danger-button" type="button" hidden>删除已上传目录</button>
+              <button id="refreshLocalRuns" class="secondary-button" type="button">刷新</button>
+              <span id="localRunFeedback" class="form-feedback" role="status"></span>
+            </div>
+          </form>
+        </section>
+        <section class="panel experiment-panel local-run-workbench">
+          <div class="subpanel-heading"><h4>运行工作台</h4><span>本机 · 独立于论文项目</span></div>
+          <div class="local-run-layout">
+            <aside class="local-run-explorer" aria-label="代码目录">
+              <h5>代码目录</h5>
+              <div id="localRunTree" class="local-run-tree"><p class="muted">上传目录后，这里会显示文件树。</p></div>
+              <div id="localRunPreview" class="local-run-preview" hidden></div>
+            </aside>
+            <div class="local-run-main">
+              <h5>运行记录与操作</h5>
+              <div id="localRunList" class="experiment-records"><p class="muted">还没有本机运行记录。</p></div>
+              <div id="localRunDetail" class="run-detail" hidden></div>
+              <section id="localRunPaper" class="run-detail" hidden>
+                <h4>从 README 形成研究想法</h4>
+                <p class="muted">模型只读取上传目录中的一个 README.md（文件名大小写兼容），根据其中的研究背景、技术方案和实验说明形成详细研究想法；不会读取目录里的其他代码或数据文件。目录没有 README.md 时会直接提示。</p>
+                <label class="local-paper-consent"><input id="localPaperShareCode" type="checkbox"> 允许向模型发送 README.md（请先核查其中是否含有密钥或敏感信息）</label>
+                <label class="local-paper-label">研究侧重点（可选）<input id="localPaperNote" maxlength="1000" placeholder="例如重点比较算法的泛化能力与特征数量"></label>
+                <button id="localPaperAnalyze" class="secondary-button" type="button">分析 README 并提出研究想法</button>
+                <div id="localPaperPlan" hidden>
+                  <label class="local-paper-label" for="localResearchIdea">研究想法或核心问题 · 请检查并修改</label>
+                  <textarea id="localResearchIdea" class="local-research-idea" rows="14" maxlength="100000" placeholder="这里将显示根据代码整理的技术路线、研究问题与验证方案"></textarea>
+                  <details id="localPaperReportDetails" class="local-paper-report-details" hidden><summary>README 分析报告 · 查看行号依据</summary><pre id="localPaperReportPre"></pre></details>
+                  <p class="muted">运行记录仍独立保存。带入项目的是你确认后的研究说明，不会把上传的原始数据集当作论文结果。</p>
+                  <button id="localPaperTransfer" class="primary-button small" type="button">带入研究工作台</button>
+                  <button id="localPaperOpenProject" class="secondary-button" type="button" hidden>查看已关联项目</button>
+                </div>
+                <p id="localPaperFeedback" class="form-feedback" role="status"></p>
+                <div id="localPaperOutput" hidden>
+                  <details><summary>查看此前生成的独立草稿（只读历史）</summary><div id="localPaperDownloads" class="local-paper-downloads"></div></details>
+                </div>
+              </section>
+            </div>
+          </div>
+        </section>
+      </section>
 
       <section id="workspaceView" class="view">
         <section id="workspaceEmpty" class="panel workspace-empty">
@@ -338,6 +482,19 @@
             </section>
           </div>
 
+          <section id="manuscriptSectionsPanel" class="manuscript-sections-panel" hidden>
+            <div class="subpanel-heading"><div><h4>完成稿 · 按章节检查与修改</h4><p>各章节独立展示；选择一节并提出修改要求，确认候选文本后才替换该节。</p></div></div>
+            <div id="manuscriptSectionList" class="manuscript-section-list"></div>
+            <div id="manuscriptSectionEditor" class="manuscript-section-editor" hidden>
+              <h5 id="manuscriptSectionTitle"></h5>
+              <label>希望怎样修改本节<textarea id="manuscriptSectionInstruction" rows="3" maxlength="2000" placeholder="例如明确纳入排除条件，保留已有引用与结果边界"></textarea></label>
+              <button id="suggestManuscriptSection" class="secondary-button" type="button">生成本节修改候选</button>
+              <label id="manuscriptSectionCandidateLabel" hidden>修改候选（可核对和编辑）<textarea id="manuscriptSectionCandidate" rows="10" maxlength="24000"></textarea></label>
+              <button id="applyManuscriptSection" class="primary-button small" type="button" hidden>确认替换这一节</button>
+              <p id="manuscriptSectionFeedback" class="form-feedback" role="status"></p>
+            </div>
+          </section>
+
           <section id="paperPreviewPanel" class="paper-preview-panel" hidden>
             <div class="subpanel-heading">
               <div><h4 id="previewTitle">研究草稿预览</h4><p id="previewHint">Markdown 将以纸张样式显示，可使用浏览器打印为 PDF。</p></div>
@@ -355,6 +512,6 @@
 
   <div id="toast" class="toast" role="alert" aria-live="assertive"></div>
   <script src="https://cdn.jsdelivr.net/npm/mermaid@11.12.1/dist/mermaid.min.js" defer></script>
-  <script src="/static/app.js?v=0.3.1-2" defer></script>
+  <script src="/static/app.js?v=0.4.0" defer></script>
 </body>
 </html>

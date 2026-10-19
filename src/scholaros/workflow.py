@@ -505,9 +505,13 @@ class ResearchWorkflow:
         *,
         role: str = "source",
         display_name: str | None = None,
+        verified_experiment: bool = False,
     ) -> dict[str, Any]:
         if role not in {"source", "results"}:
             raise ValueError("资料角色只能是 source 或 results")
+        marker = self.settings.artifacts_path / project_id / "experiments" / "adopted.json"
+        if role == "results" and marker.is_file() and not verified_experiment:
+            raise RuntimeError("项目已导入实验报告；其他结果请在新项目中整理")
         project = self._require_project(project_id)
         if project.status == ProjectStatus.RUNNING:
             raise RuntimeError("项目运行中不能上传资料；请等待本轮结束后再上传并重新运行")

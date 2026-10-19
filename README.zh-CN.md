@@ -6,7 +6,7 @@
 
 [English](./README.md) | **简体中文**
 
-[![版本](https://img.shields.io/badge/version-0.3.1-456B93)](./pyproject.toml)
+[![版本](https://img.shields.io/badge/version-0.4.0-456B93)](./pyproject.toml)
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-2ea44f)](./LICENSE)
 [![Checks](https://img.shields.io/badge/checks-run_locally-586069)](./scripts/check.sh)
@@ -26,6 +26,16 @@ Question → Scope → Search → Evidence → Design → Draft → Review → R
 ## 📢 最近更新
 
 <details open>
+<summary>2026 年 10 月 19 日 · v0.4.0 —— 实验、本机运行与 README 驱动研究流程</summary>
+
+- 新增项目文件夹计算实验、可审阅的多文件算法优化、同条件基线/候选运行与可复现实验记录。
+- 新增独立于论文项目的本机运行，支持实时终端、CSV/TXT 指标汇总、代码目录浏览、历史记录及 README 到研究想法的转入流程。
+- 将代码到研究想法的分析简化为只读取根目录 README.md，并提供详细研究提示词和缺失 README 的明确提醒。
+- 新增论文分章节修改、更宽的 IEEE 对比表格，以及最终模型综合失败时保留已完成 README 分析的本地兜底。
+
+</details>
+
+<details>
 <summary>2026 年 10 月 1 日 · 待发布 —— IEEE 导出、工作台选项与科研 Skills</summary>
 
 - 新增通用 / IEEE 期刊 LaTeX 显式选择；IEEE 稿使用原生摘要、关键词和参考文献结构，未匹配引文会阻止交付就绪。
@@ -73,7 +83,7 @@ Question → Scope → Search → Evidence → Design → Draft → Review → R
 ScholarOS 是科研辅助工具，不是自动论文作者，也不应被用于绕过课程、机构或期刊的学术规范。系统输出属于需要人工审阅的工作材料，不能直接视为可投稿论文。
 
 - 研究者需要回到原文核验引用和论断，决定研究问题、方法与分析方案。
-- 实验执行、数据真实性、结果解释、伦理审批、作者署名和投稿决定不能交给模型。
+- 模型不能自主决定实验执行、数据真实性、结果解释、伦理审批、作者署名和投稿；研究者可在独立的「实验」页确认后运行自己提供的计算实验脚本。
 - 使用 AI 的范围应按照所在机构、资助方及目标期刊或会议的规则如实披露。
 - 质量检查只能发现一部分结构和一致性问题，不能替代导师、合作者、统计专家或同行评议。
 
@@ -82,6 +92,8 @@ ScholarOS 是科研辅助工具，不是自动论文作者，也不应被用于�
 - 辅助形成问题定义、假设、方法设计、证据账本和 Markdown 研究草稿。
 - 支持由材料成稿、重写、科研诚信核查、独立审阅、按意见返修和适配新目标六类任务；项目配置记录目标场景、语言、研究边界、作者表达、参考文献目标、LaTeX 模板和图件策略。
 - 将 PDF、DOCX、TXT、Markdown、TeX、BibTeX、CSV 和 JSON 作为参考资料或实验结果加入项目。
+- Web 左侧「实验」支持上传包含子目录的项目文件夹并指定 Python 主文件，也保留 CSV + 两脚本入口；可由已配置模型建议受约束的运行命令，或在算法优化模式下提出多个现有 Python 文件的候选改动。团队审阅差异后，以原版与改进版对照运行；完整报告经确认后才导入稿件资料。详见[计算实验工作台](./docs/zh-CN/experiments.md)。
+- Web 左侧「本机运行」不依赖论文项目：上传代码目录、明确填写运行命令和指标文件（CSV 或 TXT）后，在本机直接执行，滚动记录终端输出，并从指定指标文件的数值列 / 键提取指标生成统计表；也可以给出参考命令让模型识别后手动修改。运行记录独立保存，可随后查看或关联到项目。宿主机执行需显式确认风险。选择运行记录后可让已配置模型整理详细研究想法，研究者确认后带入研究项目，再由工作流生成论文；完成稿可按章节分别提出修改要求、核对候选并确认替换。
 - 在研究材料阶段，从 arXiv、OpenAlex、Crossref、Semantic Scholar、DBLP 和 ACM 元数据等来源收集并去重候选论文。
 - 上传参考资料的项目和引导式项目在外发检索词前等待确认，并单独报告每个论文源的失败原因。
 - 对初稿和修订稿执行 9 类确定性质量检查：章节结构、证据、引用、方法要素、图设计、表设计、结果来源、研究者责任声明和正文完整度。
@@ -139,7 +151,7 @@ scholaros run "如何评估科研智能体的引用可靠性？" --offline
 
 ### 一步步推进研究
 
-终端和 Web 默认使用逐步交互模式：系统在每个阶段完成后停下，等你检查；你可以保存修改并重跑当前阶段，再确认进入下一阶段。只有明确选择“一步完成”或使用 `--automatic` 时才连续执行。外发检索词仍另行确认。
+终端和 Web 默认使用逐步交互模式：系统在每个阶段完成后停下，等你检查；你可以保存修改并重跑当前阶段，再确认进入下一阶段。只有明确选择“一步完成”或使用 `--automatic` 时才连续执行。逐步模式或上传参考资料时，外发检索词仍另行确认；一步完成且没有上传参考资料时，检索可能自动外发。
 
 ```bash
 scholaros run "如何评估科研智能体的引用可靠性？"          # 默认逐步交互
@@ -191,17 +203,10 @@ ScholarOS 默认将本地数据保存在 `.scholaros/`：
 
 ## 架构概览
 
-```mermaid
-flowchart LR
-    UI["CLI / Terminal / Web / API"] --> WF["ResearchWorkflow\n可恢复状态机"]
-    WF --> RT["AgentLoop\n消息、工具、事件"]
-    RT --> LLM["OpenAI-compatible\n模型"]
-    WF --> SEARCH["PaperSearchService\n适配器、去重、严格匹配"]
-    SEARCH --> SOURCES["arXiv · OpenAlex · Crossref\nSemantic Scholar · DBLP · ACM · IEEE"]
-    WF --> EVIDENCE["Evidence Ledger\n引用和来源边界"]
-    WF --> STORE["SQLite + artifacts\n状态、事件、制品"]
-    WF --> PAPER["paper.md\n研究草稿与图表方案"]
-```
+<p align="center">
+  <a href="./images/ScholarOS-framework.png"><img src="./images/ScholarOS-framework.png" width="100%" alt="ScholarOS v0.4.0 系统架构图"></a>
+</p>
+<p align="center"><sub>人类确认贯穿可恢复研究工作流、证据链、计算评估、稿件修订与本地交付边界。</sub></p>
 
 代码采用标准 `src` layout：
 
@@ -237,7 +242,7 @@ python -m pip install -e ".[dev]"
 - IEEE Xplore 需要官方 API key；学校网页登录不等于 API/TDM 批量全文授权。
 - ScholarOS 不绕过付费墙、验证码、机器人限制、浏览器 cookie 或机构许可。
 - 当前定位是单机、单进程研究工作台；生产多用户部署需要独立任务队列、数据库并发控制、认证和审计基础设施。
-- 证据综合仍需研究者回到原文核验；OCR、实验代码执行、真实图像生成和真实表格计算不在当前 MVP 范围内。
+- 证据综合仍需研究者回到原文核验；算法改动目前只是模型对已选 Python 文件的候选提案，须审阅后才能对照运行，不自动覆盖原项目。OCR、无人确认的代码修改、自动安装依赖、真实设备实验及自动生成结果图表仍不在当前范围内。
 - 自动检查通过不代表研究结论正确、符合投稿要求或满足所在机构的学术诚信政策。
 
 详细边界见[论文源权限与合规](./docs/zh-CN/permissions.md)。
